@@ -4,6 +4,6 @@
 ###### Requirements without Version Specifiers ######
 numpy
 scipy >= 1.9.0
-sklearn
+scikit-learn
 pandas
 
