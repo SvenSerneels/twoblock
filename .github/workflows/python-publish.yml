@@ -59,9 +59,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install build
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Build package
-        python -m setup.py sdist bdist_wheel 
-        
     - name: Build and publish
       env:
         TWINE_USERNAME: ${{ secrets.PYPIUID }}
