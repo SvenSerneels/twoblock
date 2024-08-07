@@ -15,12 +15,8 @@ from sklearn.base import (
 from sklearn.utils.metaestimators import _BaseComposition
 import copy
 import pandas as ps
-from direpack.preprocessing.robcent import VersatileScaler
-from direpack.preprocessing._preproc_utilities import scale_data
-from direpack.utils.utils import (
-    _predict_check_input,
-    _check_input,
-)
+from .utils import _check_input, _predict_check_input
+from .robcent import VersatileScaler
 
 # Draft version
 
