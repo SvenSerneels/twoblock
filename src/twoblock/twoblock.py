@@ -30,8 +30,8 @@ class twoblock(
     MultiOutputMixin,
 ):
     """
-    TWOBLOCK Two-Block Simultaneous Dimension Reduction of Multivariate X and Y
-    data blocks
+    TWOBLOCK Dense and Sparse Two-Block Simultaneous Dimension Reduction of 
+    Multivariate X and Y data blocks
 
     Parameters
     -----------
@@ -51,14 +51,20 @@ class twoblock(
 
     scale : str,
              type of scaling ('std','mad' or 'None')
+             
+    sparse : bool, default False 
+        If False, the dense twoblock (or 'XY-PLS') method by Cook et al. [1]
+        If True, the Sparse twoblock method by Serneels [2], which requires 
+            specifying the eta_x and eta_y sparsity parameters
+            
+    eta_x: float, default 0.5, 
+        X block sparsity parameter 
+        
+    eta_y. float, default 0.5
+        Y block sparsity parameter (in the paper: kappa) 
 
     copy : (def True): boolean,
              whether to copy data into twoblock object.
-
-    sparse : (def False): boolean,
-             whether to yield sparse estimates. If so, eigenvectors will be 
-             estimated using sklearn's SparsePCA and additional keyword argum-
-             ents can be passed, e.g. eta_x=.5. 
 
 
     Attributes
@@ -84,11 +90,16 @@ class twoblock(
         -  `centring_`: scaling object used internally (type: `VersatileScaler`)
 
 
-    Reference
-    ---------
+    References
+    ----------
+    [1] (dense)
     Cook, R. Dennis, Liliana Forzani, and Lan Liu.
     "Partial least squares for simultaneous reduction of response and predictor
     vectors in regression." Journal of Multivariate Analysis 196 (2023): 105163.
+    
+    [2] (sparse)
+    S. Serneels. "Sparse Twoblock Dimension Reduction: A Versatile Alternative 
+    to Sparse PLS2 and CCA." Journal of Chemometrics, 39 (2025): e70051.
 
     """
 
