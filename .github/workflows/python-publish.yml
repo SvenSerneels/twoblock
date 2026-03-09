@@ -24,7 +24,7 @@ on:
         - minor
         - major
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy:
@@ -42,6 +42,32 @@ jobs:
         python -m pip install --upgrade pip
         pip install build
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    - name: Bump version
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        INIT_FILE="src/twoblock/__init__.py"
+        # Extract current version, stripping any pre-release suffix (e.g. -beta.2)
+        CURRENT=$(grep '__version__' "$INIT_FILE" | sed 's/.*"\(.*\)"/\1/' | sed 's/-.*//')
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+        case "${{ inputs.version_bump }}" in
+          major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+          minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+          patch) PATCH=$((PATCH + 1)) ;;
+        esac
+
+        NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        sed -i "s/__version__ = \".*\"/__version__ = \"${NEW_VERSION}\"/" "$INIT_FILE"
+        echo "Bumped version to ${NEW_VERSION}"
+
+        # Update __date__ to today
+        sed -i "s/__date__ = \".*\"/__date__ = \"$(date +%Y-%m-%d)\"/" "$INIT_FILE"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add "$INIT_FILE"
+        git commit -m "Bump version to ${NEW_VERSION}"
+        git push
     - name: Build and publish
       env:
         TWINE_USERNAME: ${{ secrets.PYPIUID }}
