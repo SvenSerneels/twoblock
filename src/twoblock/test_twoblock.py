@@ -70,6 +70,56 @@ class TestTwoBlock(unittest.TestCase):
 
         self.assertGreaterEqual(r2tbt, [0.8 for i in range(self.q)])
 
+    def test_fit_sparse(self):
+        """Tests fit function with sparse=True"""
+
+        tb = twoblock(
+            n_components_x=7, n_components_y=2,
+            eta_x=.8, scale="std", sparse=True
+        )
+        tb.fit(self.Xt, self.Yt)
+
+        self.assertEqual(tb.coef_.shape, (self.p, self.q))
+
+        # Sparse model should zero out some weights per component
+        self.assertTrue(
+            np.any(np.abs(tb.x_weights_) <= tb.zero_value),
+            "Sparse X weights should have near-zero entries"
+        )
+
+        # Verify sparse-specific attributes exist
+        self.assertTrue(hasattr(tb, "x_indret_"))
+        self.assertTrue(hasattr(tb, "y_indret_"))
+
+        ypttb = tb.predict(self.Xv)
+
+        self.assertEqual(ypttb.shape, self.Yv.shape)
+
+        r2tbt = [
+            r2_score(self.Yv.iloc[:, i], ypttb[:, i]) for i in range(self.q)
+        ]
+        self.assertGreaterEqual(r2tbt, [0.5 for i in range(self.q)])
+
+    def test_fit_sparse_eta_y(self):
+        """Tests sparse fit with both eta_x and eta_y"""
+
+        tb = twoblock(
+            n_components_x=7, n_components_y=2,
+            eta_x=.5, eta_y=.5, scale="std", sparse=True
+        )
+        tb.fit(self.Xt, self.Yt)
+
+        self.assertEqual(tb.coef_.shape, (self.p, self.q))
+
+        # X block should have sparsity
+        self.assertTrue(
+            np.any(np.abs(tb.x_weights_) <= tb.zero_value),
+            "Sparse X weights should have near-zero entries"
+        )
+
+        ypttb = tb.predict(self.Xv)
+        self.assertEqual(ypttb.shape, self.Yv.shape)
+
 
 if __name__ == "__main__":
     unittest.main()
