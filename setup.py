@@ -8,13 +8,21 @@ Created on Sun Jul 22 12:18:53 2018
 
 from setuptools import setup, find_packages
 import re
-import sys
 import os
 
-SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "./src")
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
-from twoblock import __version__, __author__, __license__
+# Read version/author/license from __init__.py without importing the package,
+# which would fail because dependencies (numpy, etc.) aren't installed yet.
+_init_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "twoblock", "__init__.py")
+_metadata = {}
+with open(_init_path) as f:
+    for line in f:
+        for key in ("__version__", "__author__", "__license__"):
+            if line.startswith(key):
+                _metadata[key] = line.split("=", 1)[1].strip().strip("\"'")
+
+__version__ = _metadata["__version__"]
+__author__ = _metadata["__author__"]
+__license__ = _metadata["__license__"]
 
 readme_file = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "README.md"

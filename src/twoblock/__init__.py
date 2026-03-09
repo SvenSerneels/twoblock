@@ -9,8 +9,8 @@ Created on Sun Jul 22 12:17:17 2018
 __name__ = "twoblock"
 __author__ = "Sven Serneels"
 __license__ = "MIT"
-__version__ = "0.0.1"
-__date__ = "2024-08-07"
+__version__ = "0.0.2-beta.2"
+__date__ = "2024-09-27"
 
 # The commented lines can be uncommented if IPOPT has been installed independently.
 
