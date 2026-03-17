@@ -17,6 +17,7 @@ import copy
 import pandas as ps
 from .utils import _check_input, _predict_check_input
 from .prepro import VersatileScaler
+from .gsspp import GenSpatialSignPreProcessor
 from scipy.linalg import pinv
 
 # Draft version
@@ -43,7 +44,7 @@ class twoblock(
         n_components_x shall take a value <= min(x_data.shape)
         If unspecified, set to equal n_components_x
 
-    verbose: Boolean (def true)
+    verbose: Boolean (def True)
                 to print intermediate set of columns retained
 
     centre : str,
@@ -62,6 +63,17 @@ class twoblock(
         
     eta_y. float, default 0.5
         Y block sparsity parameter (in the paper: kappa) 
+        
+    robust, Boolean (def False)
+        whether to robustify the estimate by appplying generalized 
+        spatial sign pre-processing. 
+        
+    robopt, dict, default {center: self.centre, fun: 'linear_redescending'}, 
+        dict of options to pass on to generalized spatial sign preprocessing
+        object. By default, the centring option chosen in self.centre will be 
+        passed on to the robustification preprocessor. To obtain a robust 
+        solution, a robust centre needs to be selected here, e.g. 'l1median' or
+        'kstepLTS'
 
     copy : (def True): boolean,
              whether to copy data into twoblock object.
@@ -88,6 +100,11 @@ class twoblock(
         -  `x_sca_`: X block scale estimate
         -  `y_sca_`: y scale estimate
         -  `centring_`: scaling object used internally (type: `VersatileScaler`)
+        
+    If robust = True, 
+        
+        -  `gss_x_`: The X block generalized spatial sign preprocessing object
+        -  `gss_y_`: The Y block generalized spatial sign preprocessing object
 
 
     References
@@ -112,6 +129,8 @@ class twoblock(
         sparse=False,
         eta_x=.5,
         eta_y=.5,
+        robust = False,
+        robopt = {center: self.centre, fun: 'linear_redescending'},
         verbose=True,
         copy=True,
         **kwargs
@@ -123,6 +142,8 @@ class twoblock(
         self.sparse = sparse
         self.eta_x = eta_x
         self.eta_y = eta_y
+        self.robust = robust
+        self.robopt = robopt
         self.verbose = verbose
         self.copy = copy
 
@@ -210,8 +231,6 @@ class twoblock(
         self.x_expvar_ = np.empty(self.n_components_x,float)
         self.y_expvar_ = np.empty(self.n_components_y,float)
 
-        Xh = copy.deepcopy(X0)
-        Yh = copy.deepcopy(Y0)
         X0var = np.var(X0.ravel())
         Y0var = np.var(Y0.ravel())
         Xvare = 0
@@ -220,9 +239,18 @@ class twoblock(
         if self.sparse:
             oldgoodies_x = np.array([])
             oldgoodies_y = np.array([])
+            
+        if self.robust: 
+            gssx = GenSpatialSignPreProcessor(**self.robopt)
+            X0 = gssx.fit_transform(X0)
+            gssy = GenSpatialSignPreProcessor(**self.robopt)
+            Y0 = gssy.fit_transform(Y0)
+            
+        Xh = copy.deepcopy(X0)
+        Yh = copy.deepcopy(Y0)
 
         for i in range(self.n_components_x):
-
+            
             sXY = np.dot(Xh.T, Y0) / n
 
             u, _, _ = np.linalg.svd(sXY)
@@ -367,6 +395,10 @@ class twoblock(
         setattr(self, "y_colret_", colry)
         setattr(self, "x_indret_", goodies_x)
         setattr(self, "y_indret_", goodies_y)
+        
+        if self.robust:
+            setattr(self, "gss_x_", gssx)
+            setattr(self, "gss_y_", gssx)
         
         return self
 
