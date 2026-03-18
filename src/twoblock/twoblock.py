@@ -68,12 +68,8 @@ class twoblock(
         whether to robustify the estimate by appplying generalized 
         spatial sign pre-processing. 
         
-    robopt, dict, default {center: self.centre, fun: 'linear_redescending'}, 
-        dict of options to pass on to generalized spatial sign preprocessing
-        object. By default, the centring option chosen in self.centre will be 
-        passed on to the robustification preprocessor. To obtain a robust 
-        solution, a robust centre needs to be selected here, e.g. 'l1median' or
-        'kstepLTS'
+    fun, str, default 'linear_redescending.' Function to apply in generalized   
+        spatial sign transformation. For options, see `gsspp.py`.
 
     copy : (def True): boolean,
              whether to copy data into twoblock object.
@@ -130,7 +126,7 @@ class twoblock(
         eta_x=.5,
         eta_y=.5,
         robust = False,
-        robopt = {center: self.centre, fun: 'linear_redescending'},
+        fun = 'linear_redescending',
         verbose=True,
         copy=True,
         **kwargs
@@ -143,7 +139,7 @@ class twoblock(
         self.eta_x = eta_x
         self.eta_y = eta_y
         self.robust = robust
-        self.robopt = robopt
+        self.fun = fun
         self.verbose = verbose
         self.copy = copy
 
@@ -240,10 +236,11 @@ class twoblock(
             oldgoodies_x = np.array([])
             oldgoodies_y = np.array([])
             
-        if self.robust: 
-            gssx = GenSpatialSignPreProcessor(**self.robopt)
+        if self.robust:
+            robopt = {'center': self.centre, 'fun': self.fun}
+            gssx = GenSpatialSignPreProcessor(**robopt)
             X0 = gssx.fit_transform(X0)
-            gssy = GenSpatialSignPreProcessor(**self.robopt)
+            gssy = GenSpatialSignPreProcessor(**robopt)
             Y0 = gssy.fit_transform(Y0)
             
         Xh = copy.deepcopy(X0)
