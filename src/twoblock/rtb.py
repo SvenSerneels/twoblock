@@ -251,20 +251,22 @@ class rtb(
         my = scaling.col_loc_
         sy = scaling.col_sca_
 
-        # Starting weights from X block
+        # Starting weights for both blocks
         we = self._compute_starting_weights(Xs, scaling, n, p)
+        wf = self._compute_starting_weights(Ys, scaling, n, q)
 
         # Weight matrices for X and Y
         WEmat_x = np.array(
             [np.sqrt(we) for _ in range(p)], ndmin=1
         ).T
         WEmat_y = np.array(
-            [np.sqrt(we) for _ in range(q)], ndmin=1
+            [np.sqrt(wf) for _ in range(q)], ndmin=1
         ).T
         Xw = np.multiply(Xs, WEmat_x).astype("float64")
         Yw = np.multiply(Ys, WEmat_y).astype("float64")
 
         scalingt = copy.deepcopy(scaling)
+        scalingu = copy.deepcopy(scaling)
 
         # Iteratively reweighted twoblock
         loops = 1
@@ -286,36 +288,15 @@ class rtb(
         while (difference > self.tol) and (loops < self.maxit):
             res_tb.fit(Xw, Yw)
 
-            # Unweight the X scores
-            T = np.divide(
-                res_tb.x_scores_,
-                WEmat_x[:, 0:self.n_components_x]
+            # Update weights based on X score distances
+            wte = self._update_weights(
+                res_tb.x_scores_, WEmat_x, self.n_components_x, scalingt
+            )
+            wue = self._update_weights(
+                res_tb.y_scores_, WEmat_y, self.n_components_y, scalingu
             )
 
             b = res_tb.coef_scaled_
-
-            # Update weights based on X score distances
-            scalet = self.scale
-            if scalet == "None":
-                scalingt.set_params(scale="mad")
-            dt = scalingt.fit_transform(T)
-            wtn = np.sqrt(
-                np.array(np.sum(np.square(dt), 1), dtype=np.float64)
-            )
-            wtn = wtn / np.median(wtn)
-            wtn = wtn.reshape(-1)
-
-            if self.fun == "Fair":
-                wte = Fair(wtn, self.probctx_)
-            elif self.fun == "Huber":
-                wte = Huber(wtn, self.probctx_)
-            elif self.fun == "Hampel":
-                self.probctx_ = chi2.ppf(self.probp1, self.n_components_x)
-                self.hampelbx_ = chi2.ppf(self.probp2, self.n_components_x)
-                self.hampelrx_ = chi2.ppf(self.probp3, self.n_components_x)
-                wte = Hampel(
-                    wtn, self.probctx_, self.hampelbx_, self.hampelrx_
-                )
 
             # Check convergence
             b2sum = np.sum(np.power(b, 2))
@@ -332,12 +313,22 @@ class rtb(
             if len(w0) >= (n / 2):
                 break
 
+            wue = np.array(wue).reshape(-1)
+            wf = wue.astype("float64")
+            w0 = []
+            if any(wf < 1e-06):
+                w0 = np.where(wf < 1e-06)[0]
+                wf[w0] = 1e-06
+                wf = np.array(wf, dtype=np.float64)
+            if len(w0) >= (n / 2):
+                break
+
             # Reweight both X and Y
             WEmat_x = np.array(
                 [np.sqrt(we) for _ in range(p)], ndmin=1
             ).T
             WEmat_y = np.array(
-                [np.sqrt(we) for _ in range(q)], ndmin=1
+                [np.sqrt(wf) for _ in range(q)], ndmin=1
             ).T
             Xw = np.multiply(Xs, WEmat_x).astype("float64")
             Yw = np.multiply(Ys, WEmat_y).astype("float64")
@@ -351,10 +342,10 @@ class rtb(
             )
 
         # Final weights
-        w = we.copy()
+        w = wf.copy()
         if len(w0) > 0:
             w[w0] = 0
-        wt = wte.copy() if isinstance(wte, np.ndarray) else np.array(wte)
+        wt = we.copy() if isinstance(wte, np.ndarray) else np.array(wte)
         if len(w0) > 0:
             wt[w0] = 0
 
@@ -397,10 +388,57 @@ class rtb(
         setattr(self, "x_sca_", sX)
         setattr(self, "y_sca_", sy)
         setattr(self, "x_caseweights_", wt)
-        setattr(self, "caseweights_", w)
+        setattr(self, "y_caseweights_", w)
+        setattr(self, "caseweights_", wt * w)
         setattr(self, "centring_", scaling)
         setattr(self, "scalingt_", scalingt)
+        setattr(self, "scalingu_", scalingu)
         return self
+
+    def _update_weights(self, scores, WEmat, n_components, scalingt):
+        """
+        Unweight scores and compute updated case weights from score distances.
+
+        Parameters
+        ----------
+        scores : numpy array
+            Weighted score matrix (n x n_components).
+        WEmat : numpy array
+            Weight expansion matrix (n x d).
+        n_components : int
+            Number of components to use.
+        scalingt : VersatileScaler
+            Scaling object for transforming scores.
+
+        Returns
+        -------
+        wte : numpy array
+            Updated case weights (n,).
+        """
+        T = np.divide(scores, WEmat[:, 0:n_components])
+
+        scalet = self.scale
+        if scalet == "None":
+            scalingt.set_params(scale="mad")
+        dt = scalingt.fit_transform(T)
+        wtn = np.sqrt(
+            np.array(np.sum(np.square(dt), 1), dtype=np.float64)
+        )
+        wtn = wtn / np.median(wtn)
+        wtn = wtn.reshape(-1)
+
+        if self.fun == "Fair":
+            wte = Fair(wtn, self.probctx_)
+        elif self.fun == "Huber":
+            wte = Huber(wtn, self.probctx_)
+        elif self.fun == "Hampel":
+            self.probctx_ = chi2.ppf(self.probp1, n_components)
+            self.hampelbx_ = chi2.ppf(self.probp2, n_components)
+            self.hampelrx_ = chi2.ppf(self.probp3, n_components)
+            wte = Hampel(
+                wtn, self.probctx_, self.hampelbx_, self.hampelrx_
+            )
+        return wte
 
     def _compute_starting_weights(self, Zs, scaling, n, d):
         """
