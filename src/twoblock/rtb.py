@@ -356,8 +356,10 @@ class rtb(
         if self.centre == "None" and self.scale == "None":
             B_rescaled = res_tb.coef_scaled_
         else:
+            sX_safe = sX.copy()
+            sX_safe[sX_safe < 1e-10] = 1.0
             B_rescaled = np.multiply(
-                np.outer(sy, np.divide(1, sX)).T, res_tb.coef_scaled_
+                np.outer(sy, np.divide(1, sX_safe)).T, res_tb.coef_scaled_
             )
 
         Yp_rescaled = np.matmul(X, B_rescaled)
