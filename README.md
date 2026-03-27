@@ -106,4 +106,5 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
     to Sparse PLS2 and CCA."](https://doi.org/10.1002/cem.70051) Journal of
     Chemometrics, 39 (2025): e70051.
 
-[3] S. Serneels. "Robust Twoblock Dimension Reduction." (2025, submitted).
+[3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
+(2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
