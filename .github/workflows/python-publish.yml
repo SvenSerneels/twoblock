@@ -46,8 +46,10 @@ jobs:
       if: github.event_name == 'workflow_dispatch'
       run: |
         INIT_FILE="src/twoblock/__init__.py"
+        # Strip Windows carriage returns to avoid arithmetic errors
+        sed -i 's/\r$//' "$INIT_FILE"
         # Extract current version, stripping any pre-release suffix (e.g. -beta.2)
-        CURRENT=$(grep '__version__' "$INIT_FILE" | sed 's/.*"\(.*\)"/\1/' | sed 's/-.*//')
+        CURRENT=$(grep '__version__' "$INIT_FILE" | sed 's/.*"\(.*\)"/\1/' | sed 's/-.*//' | tr -d '\r')
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
         case "${{ inputs.version_bump }}" in
