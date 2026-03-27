@@ -59,4 +59,7 @@ setup(
         "scikit-learn>=1.3.0",
         "pandas>=1.4.0",
     ],
+    extras_require={
+        "gpu": ["cupy-cuda12x>=14.0"],
+    },
 )

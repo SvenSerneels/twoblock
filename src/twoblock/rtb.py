@@ -152,6 +152,7 @@ class rtb(
         start_cutoff_mode="specific",
         start_X_init="pcapp",
         copy=True,
+        gpu=False,
     ):
         self.n_components_x = n_components_x
         self.n_components_y = n_components_y
@@ -170,6 +171,7 @@ class rtb(
         self.start_cutoff_mode = start_cutoff_mode
         self.start_X_init = start_X_init
         self.copy = copy
+        self.gpu = gpu
         self.probctx_ = "irrelevant"
         self.hampelbx_ = "irrelevant"
         self.hampelrx_ = "irrelevant"
@@ -283,6 +285,7 @@ class rtb(
             scale="None",
             verbose=False,
             copy=False,
+            gpu=self.gpu,
         )
 
         while (difference > self.tol) and (loops < self.maxit):
