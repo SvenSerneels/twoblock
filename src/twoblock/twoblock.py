@@ -17,7 +17,7 @@ import copy
 import pandas as ps
 from .utils import _check_input, _predict_check_input
 from .prepro import VersatileScaler
-from scipy.linalg import pinv
+from ._gpu_utils import get_array_module, to_xp, to_numpy
 
 # Draft version
 
@@ -114,6 +114,7 @@ class twoblock(
         eta_y=.5,
         verbose=True,
         copy=True,
+        gpu=False,
         **kwargs
     ):
         self.n_components_x = n_components_x
@@ -125,6 +126,7 @@ class twoblock(
         self.eta_y = eta_y
         self.verbose = verbose
         self.copy = copy
+        self.gpu = gpu
 
         if 'zero_value' in kwargs:
             self.zero_value = kwargs.pop('zero_value')
@@ -201,39 +203,45 @@ class twoblock(
         my = centring.col_loc_
         sy = centring.col_sca_
 
-        self.x_scores_ = np.empty((n, self.n_components_x), float)
-        self.y_scores_ = np.empty((n, self.n_components_y), float)
-        self.x_weights_ = np.empty((p, self.n_components_x), float)
-        self.y_weights_ = np.empty((q, self.n_components_y), float)
-        self.x_loadings_ = np.empty((p, self.n_components_x), float)
-        self.y_loadings_ = np.empty((q, self.n_components_y), float)
-        self.x_expvar_ = np.empty(self.n_components_x,float)
-        self.y_expvar_ = np.empty(self.n_components_y,float)
+        # Select array backend (numpy or cupy)
+        xp, xp_linalg = get_array_module(self.gpu)
 
-        Xh = copy.deepcopy(X0)
-        Yh = copy.deepcopy(Y0)
-        X0var = np.var(X0.ravel())
-        Y0var = np.var(Y0.ravel())
+        # Transfer centered/scaled data to GPU if needed
+        X0g = to_xp(X0, xp)
+        Y0g = to_xp(Y0, xp)
+
+        x_scores_ = xp.empty((n, self.n_components_x), dtype='float64')
+        y_scores_ = xp.empty((n, self.n_components_y), dtype='float64')
+        x_weights_ = xp.empty((p, self.n_components_x), dtype='float64')
+        y_weights_ = xp.empty((q, self.n_components_y), dtype='float64')
+        x_loadings_ = xp.empty((p, self.n_components_x), dtype='float64')
+        y_loadings_ = xp.empty((q, self.n_components_y), dtype='float64')
+        x_expvar_ = xp.empty(self.n_components_x, dtype='float64')
+        y_expvar_ = xp.empty(self.n_components_y, dtype='float64')
+
+        Xh = X0g.copy()
+        Yh = Y0g.copy()
+        X0var = xp.var(X0g.ravel())
+        Y0var = xp.var(Y0g.ravel())
         Xvare = 0
         Yvare = 0
 
         if self.sparse:
-            oldgoodies_x = np.array([])
-            oldgoodies_y = np.array([])
+            oldgoodies_x = xp.array([])
+            oldgoodies_y = xp.array([])
 
         for i in range(self.n_components_x):
 
-            sXY = np.dot(Xh.T, Y0) / n
+            sXY = xp.dot(Xh.T, Y0g) / n
 
-            u, _, _ = np.linalg.svd(sXY)
+            u, _, _ = xp.linalg.svd(sXY)
             x_weights = u[:, 0].reshape((p,))
             if self.sparse:
-                wh = x_weights / np.linalg.norm(x_weights)
-                # goodies = abs(wh)-llambda/2 lambda definition
-                goodies_x = abs(wh) - self.eta_x * max(abs(wh))
-                wh = np.multiply(goodies_x, np.sign(wh))
-                goodies_x = np.where((goodies_x > 0))[0]
-                goodies_x = np.union1d(oldgoodies_x, goodies_x)
+                wh = x_weights / xp.linalg.norm(x_weights)
+                goodies_x = abs(wh) - self.eta_x * float(xp.max(abs(wh)))
+                wh = xp.multiply(goodies_x, xp.sign(wh))
+                goodies_x = xp.where((goodies_x > 0))[0]
+                goodies_x = xp.union1d(oldgoodies_x, goodies_x)
                 oldgoodies_x = goodies_x
                 if len(goodies_x) == 0:
                     colret = None
@@ -246,39 +254,38 @@ class twoblock(
                         + ", try lower sparsity"
                     )
                     break
-                elimvars_x = np.setdiff1d(range(0, p), goodies_x)
+                elimvars_x = xp.setdiff1d(xp.arange(p), goodies_x)
                 x_weights[elimvars_x] = self.zero_value
-            x_scores = np.dot(Xh, x_weights)
-            x_loadings = np.dot(Xh.T, x_scores) / \
-                np.dot(x_scores, x_scores)
+            x_scores = xp.dot(Xh, x_weights)
+            x_loadings = xp.dot(Xh.T, x_scores) / \
+                xp.dot(x_scores, x_scores)
             if self.sparse:
                 goodies_x = goodies_x.astype(int)
                 x_loadings[elimvars_x] = self.zero_value
-                X0var = np.var(X0[:, goodies_x].ravel())
+                X0var = xp.var(X0g[:, goodies_x].ravel())
 
-            scolo = np.outer(x_scores, x_loadings)
+            scolo = xp.outer(x_scores, x_loadings)
             Xh -= scolo
-            Xvare += np.var(scolo.ravel())
+            Xvare += float(xp.var(scolo.ravel()))
 
-            self.x_weights_[:, i] = x_weights
-            self.x_scores_[:, i] = x_scores
-            self.x_loadings_[:, i] = x_loadings
-            self.x_expvar_[i] = Xvare/X0var
+            x_weights_[:, i] = x_weights
+            x_scores_[:, i] = x_scores
+            x_loadings_[:, i] = x_loadings
+            x_expvar_[i] = Xvare / float(X0var)
 
         for i in range(self.n_components_y):
 
-            sYX = np.dot(Yh.T, X0) / n
+            sYX = xp.dot(Yh.T, X0g) / n
 
-            v, _, _ = np.linalg.svd(sYX)
+            v, _, _ = xp.linalg.svd(sYX)
             y_weights = v[:, 0].reshape((q,))
 
             if self.sparse:
-                wh = y_weights / np.linalg.norm(y_weights)
-                # goodies = abs(wh)-llambda/2 lambda definition
-                goodies_y = abs(wh) - self.eta_y * max(abs(wh))
-                wh = np.multiply(goodies_y, np.sign(wh))
-                goodies_y = np.where((goodies_y > 0))[0]
-                goodies_y = np.union1d(oldgoodies_y, goodies_y)
+                wh = y_weights / xp.linalg.norm(y_weights)
+                goodies_y = abs(wh) - self.eta_y * float(xp.max(abs(wh)))
+                wh = xp.multiply(goodies_y, xp.sign(wh))
+                goodies_y = xp.where((goodies_y > 0))[0]
+                goodies_y = xp.union1d(oldgoodies_y, goodies_y)
                 oldgoodies_y = goodies_y
                 if len(goodies_y) == 0:
                     colret = None
@@ -291,45 +298,48 @@ class twoblock(
                         + ", try lower sparsity"
                     )
                     break
-                elimvars_y = np.setdiff1d(range(0, q), goodies_y)
+                elimvars_y = xp.setdiff1d(xp.arange(q), goodies_y)
                 y_weights[elimvars_y] = self.zero_value
 
-            y_scores = np.dot(Yh, y_weights)
-            y_loadings = np.dot(Yh.T, y_scores) / \
-                np.dot(y_scores, y_scores)
+            y_scores = xp.dot(Yh, y_weights)
+            y_loadings = xp.dot(Yh.T, y_scores) / \
+                xp.dot(y_scores, y_scores)
 
             if self.sparse:
                 goodies_y = goodies_y.astype(int)
                 y_loadings[elimvars_y] = self.zero_value
-                Y0var = np.var(Y0[:, goodies_y].ravel())
+                Y0var = xp.var(Y0g[:, goodies_y].ravel())
 
-            scolo = np.outer(y_scores, y_loadings)
+            scolo = xp.outer(y_scores, y_loadings)
             Yh -= scolo
-            Yvare += np.var(scolo.ravel())
+            Yvare += float(xp.var(scolo.ravel()))
 
-            self.y_weights_[:, i] = y_weights
-            self.y_scores_[:, i] = y_scores
-            self.y_loadings_[:, i] = y_loadings
-            self.y_expvar_[i] = Yvare/Y0var
+            y_weights_[:, i] = y_weights
+            y_scores_[:, i] = y_scores
+            y_loadings_[:, i] = y_loadings
+            y_expvar_[i] = Yvare / float(Y0var)
 
-        wtx = np.dot(X0, self.x_weights_)
+        wtx = xp.dot(X0g, x_weights_)
         if self.sparse:
-            wti = pinv(np.dot(wtx.T, wtx))
+            wti = xp_linalg.pinv(xp.dot(wtx.T, wtx))
         else:
-            wti = np.linalg.inv(np.dot(wtx.T, wtx))
-        swg = np.dot(wtx.T, np.dot(Y0, self.y_weights_))
-        self.coef_scaled_ = np.matmul(
-            np.matmul(self.x_weights_, wti), np.dot(swg, self.y_weights_.T)
+            wti = xp.linalg.inv(xp.dot(wtx.T, wtx))
+        swg = xp.dot(wtx.T, xp.dot(Y0g, y_weights_))
+        coef_scaled = xp.matmul(
+            xp.matmul(x_weights_, wti), xp.dot(swg, y_weights_.T)
         )
 
         if self.centre == "None" and self.scale == "None":
-            B_rescaled = self.coef_scaled_
+            B_rescaled = coef_scaled
         else:
-            # sklearn has this line wrong
-            B_rescaled = np.multiply(
-                np.outer(sy, np.divide(1, sX)).T, self.coef_scaled_
+            B_rescaled = xp.multiply(
+                xp.outer(to_xp(sy, xp), xp.divide(1, to_xp(sX, xp))).T,
+                coef_scaled
             )
 
+        # Convert back to numpy for sklearn compatibility
+        B_rescaled = to_numpy(B_rescaled)
+        self.coef_scaled_ = to_numpy(coef_scaled)
         Yp_rescaled = np.matmul(X, B_rescaled)
         if self.centre == "None":
             intercept = 0
@@ -340,8 +350,21 @@ class twoblock(
 
         Yfit = Yp_rescaled + intercept
         R = Y - Yfit
-        
-        if not(self.sparse):
+
+        # Convert all fitted arrays back to numpy
+        self.x_scores_ = to_numpy(x_scores_)
+        self.y_scores_ = to_numpy(y_scores_)
+        self.x_weights_ = to_numpy(x_weights_)
+        self.y_weights_ = to_numpy(y_weights_)
+        self.x_loadings_ = to_numpy(x_loadings_)
+        self.y_loadings_ = to_numpy(y_loadings_)
+        self.x_expvar_ = to_numpy(x_expvar_)
+        self.y_expvar_ = to_numpy(y_expvar_)
+
+        if self.sparse:
+            goodies_x = to_numpy(goodies_x)
+            goodies_y = to_numpy(goodies_y)
+        else:
             goodies_x = np.arange(p)
             goodies_y = np.arange(q)
         if len(colx) > 0:
