@@ -16,3 +16,4 @@ __date__ = "2026-03-30"
 
 from .twoblock import twoblock
 from .rtb import rtb
+from .spadimo import spadimo

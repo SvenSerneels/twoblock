@@ -284,6 +284,54 @@ def scaleTau2(x0, c1=4.5, c2=3, consistency=True, **kwargs):
     return np.array(sigma0 * np.sqrt(summ(rho) / nEs2)).reshape((p,))
 
 
+def Qn(X, c=2.21914, **kwargs):
+    """
+    Qn scale estimator - robust scale based on pairwise differences.
+
+    The Qn estimator by Rousseeuw & Croux (1993) is more efficient than MAD
+    for Gaussian data while maintaining high breakdown point.
+
+    Parameters
+    ----------
+    X : array-like
+        Data matrix (n x p). Scale is computed column-wise.
+    c : float, default 2.21914
+        Consistency factor for Gaussian distribution.
+    **kwargs : dict
+        Additional arguments (ignored, for API compatibility).
+
+    Returns
+    -------
+    s : ndarray
+        Qn scale estimate for each column.
+    """
+    X = np.atleast_2d(X)
+    if X.shape[0] == 1:
+        X = X.T
+    n, p = X.shape
+
+    # k is the order statistic index (approx binomial(n,2)/4)
+    h = int(np.floor(n / 2)) + 1
+    k = int(h * (h - 1) / 2)
+
+    s = np.zeros(p)
+    for j in range(p):
+        col = X[:, j]
+        # Compute all pairwise absolute differences
+        diffs = []
+        for i in range(n):
+            for l in range(i + 1, n):
+                diffs.append(abs(col[i] - col[l]))
+        diffs = np.sort(diffs)
+        # k-th order statistic (1-indexed in formula, 0-indexed here)
+        if k > 0 and k <= len(diffs):
+            s[j] = c * diffs[k - 1]
+        else:
+            s[j] = c * diffs[0] if len(diffs) > 0 else 0.0
+
+    return s
+
+
 def scale_data(X, m, s):
     """
     Column-wise data scaling on location and scale estimates.
