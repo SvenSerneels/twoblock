@@ -7,7 +7,7 @@ The sparse version is a `scikit-learn` compatible implementation of sparse twobl
 
 The robust version (`rtb`) extends twoblock with iterative M-estimation reweighting, providing resistance to outliers in both X and Y blocks [3].
 
-The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier.
+The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [4].
 
 ## Installation
 
@@ -137,7 +137,7 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 
 ## References
 
-[1] Cook, R. Dennis, Liliana Forzani, and Lan Liu.
+[1] R.D. Cook, L. Forzani, L. Liu.
     ["Partial least squares for simultaneous reduction of response and predictor
     vectors in regression."](https://doi.org/10.1016/j.jmva.2023.105163) Journal
     of Multivariate Analysis 196 (2023): 105163.
@@ -148,3 +148,7 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 
 [3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
 (2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
+
+[4] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which 
+    variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5) 
+    Statistics and Computing 29 (4), 707-723.
