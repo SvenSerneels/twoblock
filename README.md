@@ -7,6 +7,8 @@ The sparse version is a `scikit-learn` compatible implementation of sparse twobl
 
 The robust version (`rtb`) extends twoblock with iterative M-estimation reweighting, providing resistance to outliers in both X and Y blocks [3].
 
+The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier.
+
 ## Installation
 
 ```bash
@@ -87,6 +89,44 @@ gcv = GridSearchCV(rtb(verbose=False),
                    scoring='r2', cv=5)
 gcv.fit(X_train, Y_train)
 ```
+
+### spadimo — Sparse directions of maximal outlyingness
+
+SPADIMO identifies which variables contribute most to making an observation an outlier. Given case weights from a robust estimator (e.g., `rtb`), it computes a sparse direction of maximal outlyingness and flags the contributing variables.
+
+```python
+from twoblock import rtb, spadimo
+
+# First, fit a robust model to get case weights
+r = rtb(n_components_x=5, n_components_y=2,
+        centre='l1median', scale='mad', fun='Hampel')
+r.fit(X, Y)
+
+# Find observations with low weights (potential outliers)
+outlier_indices = np.where(r.caseweights_ < 0.5)[0]
+
+# Analyze an outlier to find contributing variables
+sp = spadimo(scale='Qn', stop_early=True)
+sp.fit(X, r.caseweights_, obs=outlier_indices[0])
+
+# Get the flagged variables
+print(f"Outlying variables: {sp.outlvars_}")
+print(f"Outlyingness before: {sp.outlyingness_before_:.2f}")
+print(f"Outlyingness after removing flagged vars: {sp.outlyingness_after_:.2f}")
+
+# With a DataFrame, get variable names directly
+sp.fit(X_df, r.caseweights_, obs=outlier_indices[0])
+print(f"Outlying variable names: {sp.get_outlying_variables(names=True)}")
+
+# Print a summary
+sp.summary()
+```
+
+Key parameters:
+- `scale`: Robust scale estimator ('Qn', 'mad', 'scaleTau2')
+- `etas`: Sparsity parameters (default: sequence from 0.9 to 0.1)
+- `stop_early`: Stop at first eta where observation becomes non-outlying
+- `csq_critv`: Chi-squared quantile for outlyingness threshold (default: 0.975)
 
 ## Examples
 
