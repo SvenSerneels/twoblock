@@ -81,6 +81,12 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
     outlyingness_factor : float, default 1.0
         Multiplier for outlier threshold.
 
+    start_cellwise : bool, default False
+        If True, use cellwise robust starting values via DDC (DetectDeviatingCells)
+        from robpy. DDC detects cellwise outliers and imputes them before
+        computing initial estimates. Requires robpy package.
+        If False (default), use casewise robust starting values (MM or LTS).
+
     gpu : bool, default False
         Enable GPU acceleration via CuPy.
 
@@ -133,6 +139,10 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
 
     y_scale_ : float or ndarray
         Scale value(s) for y.
+
+    ddc_outliers_ : ndarray of shape (n, p) or None
+        Boolean matrix of cellwise outliers detected by DDC at initialization.
+        Only set if start_cellwise=True.
     """
 
     def __init__(
@@ -150,6 +160,7 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
         spadieta=None,
         crit_cellwise=0.99,
         outlyingness_factor=1.0,
+        start_cellwise=False,
         gpu=False,
         verbose=True,
         copy=True,
@@ -167,6 +178,7 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
         self.spadieta = spadieta
         self.crit_cellwise = crit_cellwise
         self.outlyingness_factor = outlyingness_factor
+        self.start_cellwise = start_cellwise
         self.gpu = gpu
         self.verbose = verbose
         self.copy = copy
@@ -212,6 +224,10 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
             X = X.copy()
             y = y.copy()
 
+        # Store original X and y for use at the end of fit
+        X_original = X.copy()
+        y_original = y.copy()
+
         # Validate parameters
         if self.fun not in ('Hampel', 'Huber', 'Fair'):
             raise ValueError(
@@ -230,17 +246,70 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
         else:
             spadieta = np.asarray(self.spadieta)
 
-        # Robust centering and scaling of X
+        # Initialize cellwise weights to 1 (no downweighting)
+        cellweights = np.ones((n, p))
+        cellwise_outliers = np.zeros((n, p), dtype=bool)
+        ddc_outliers = None
+
+        # Cellwise robust starting values via DDC
+        if self.start_cellwise:
+            if self.verbose:
+                print("Computing cellwise robust starting values via DDC...")
+            try:
+                from robpy.outliers.ddc import DDC
+
+                # DDC expects a pandas DataFrame
+                if self.colnames_ is not None:
+                    X_df = ps.DataFrame(X, columns=self.colnames_)
+                else:
+                    X_df = ps.DataFrame(X, columns=[f'X{i}' for i in range(p)])
+
+                # Run DDC on X to detect cellwise outliers
+                ddc = DDC()
+                ddc.fit(X_df)
+
+                # Get DDC outlier flags and imputed data
+                # DDC stores cellwise outliers as boolean ndarray
+                ddc_outliers = ddc.cellwise_outliers_
+                if hasattr(ddc_outliers, 'to_numpy'):
+                    ddc_outliers = ddc_outliers.to_numpy()
+                X_ddc_imputed = ddc.impute(X_df)
+                if hasattr(X_ddc_imputed, 'to_numpy'):
+                    X_ddc_imputed = X_ddc_imputed.to_numpy()
+
+                # Initialize cellwise outliers and weights from DDC
+                cellwise_outliers = ddc_outliers.copy()
+                cellweights[ddc_outliers] = 0.0
+
+                # Use DDC-imputed data for subsequent calculations
+                X = X_ddc_imputed
+
+                if self.verbose:
+                    n_ddc_outliers = np.sum(ddc_outliers)
+                    pct_ddc = 100 * n_ddc_outliers / (n * p)
+                    print(f"DDC detected {n_ddc_outliers} cellwise outliers "
+                          f"({pct_ddc:.2f}%)")
+
+            except ImportError:
+                warnings.warn(
+                    "robpy package not available. Install with: pip install robpy. "
+                    "Falling back to casewise robust starting values."
+                )
+                self.start_cellwise = False
+            except Exception as e:
+                warnings.warn(
+                    f"DDC failed: {e}. "
+                    "Falling back to casewise robust starting values."
+                )
+                self.start_cellwise = False
+
+        # Robust centering and scaling of X (possibly DDC-imputed)
         x_center, x_scale = self._robust_center_scale(X)
         Xs = (X - x_center) / x_scale
 
         # Robust centering and scaling of y
         y_center, y_scale = self._robust_center_scale_1d(y)
         ys = (y - y_center) / y_scale
-
-        # Initialize cellwise weights to 1 (no downweighting)
-        cellweights = np.ones((n, p))
-        cellwise_outliers = np.zeros((n, p), dtype=bool)
 
         # Initial estimate via MM or LTS
         if self.verbose:
@@ -349,14 +418,17 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
         coef = (y_scale / x_scale) * beta
         intercept = y_center - np.sum(coef * x_center)
 
-        fitted = X @ coef + intercept
-        residuals = y - fitted
+        # Use original X and y for final predictions and residuals
+        fitted = X_original @ coef + intercept
+        residuals = y_original - fitted
 
         # Identify casewise outliers (those with very low case weights)
         casewise_outliers = caseweights < 0.1
 
-        # Impute outlying cells
-        X_imputed = self._impute_cells(X, y, coef, intercept, cellwise_outliers)
+        # Impute outlying cells using original X and y
+        X_imputed = self._impute_cells(
+            X_original, y_original, coef, intercept, cellwise_outliers
+        )
 
         # Store fitted attributes
         setattr(self, 'coef_', coef)
@@ -373,8 +445,9 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
         setattr(self, 'x_scale_', x_scale)
         setattr(self, 'y_center_', y_center)
         setattr(self, 'y_scale_', y_scale)
-        setattr(self, 'X_', X)
-        setattr(self, 'y_', y)
+        setattr(self, 'ddc_outliers_', ddc_outliers)
+        setattr(self, 'X_', X_original)
+        setattr(self, 'y_', y_original)
 
         return self
 

@@ -320,6 +320,64 @@ class TestCRM(unittest.TestCase):
         self.assertTrue(hasattr(model, 'coef_'))
         self.assertEqual(model.coef_.shape, (3,))
 
+    def test_start_cellwise_clean_data(self):
+        """Test start_cellwise=True on clean data"""
+        try:
+            from robpy.outliers.ddc import DDC  # noqa: F401
+        except ImportError:
+            self.skipTest("robpy not available")
+
+        model = crm(start_cellwise=True, verbose=False)
+        model.fit(self.X, self.y)
+
+        self.assertTrue(hasattr(model, 'coef_'))
+        self.assertTrue(hasattr(model, 'ddc_outliers_'))
+        # ddc_outliers_ should be set when start_cellwise=True
+        self.assertIsNotNone(model.ddc_outliers_)
+        self.assertEqual(model.ddc_outliers_.shape, (self.n, self.p))
+
+    def test_start_cellwise_contaminated_data(self):
+        """Test start_cellwise=True on contaminated data"""
+        try:
+            from robpy.outliers.ddc import DDC  # noqa: F401
+        except ImportError:
+            self.skipTest("robpy not available")
+
+        model = crm(start_cellwise=True, verbose=False)
+        model.fit(self.X_cont, self.y_cont)
+
+        self.assertTrue(hasattr(model, 'coef_'))
+        self.assertTrue(hasattr(model, 'ddc_outliers_'))
+        # DDC should detect some outliers in contaminated data
+        self.assertIsNotNone(model.ddc_outliers_)
+
+        # Coefficients should still be reasonable
+        coef_error = np.sqrt(np.sum((model.coef_ - self.beta_true) ** 2))
+        self.assertLess(coef_error, 3.0, "Coefficients should be reasonable")
+
+    def test_start_cellwise_false_no_ddc(self):
+        """Test that start_cellwise=False does not use DDC"""
+        model = crm(start_cellwise=False, verbose=False)
+        model.fit(self.X, self.y)
+
+        self.assertTrue(hasattr(model, 'coef_'))
+        # ddc_outliers_ should be None when start_cellwise=False
+        self.assertIsNone(model.ddc_outliers_)
+
+    def test_start_cellwise_stores_original_data(self):
+        """Test that original X and y are stored when using DDC"""
+        try:
+            from robpy.outliers.ddc import DDC  # noqa: F401
+        except ImportError:
+            self.skipTest("robpy not available")
+
+        model = crm(start_cellwise=True, verbose=False)
+        model.fit(self.X_cont, self.y_cont)
+
+        # X_ and y_ should be the original (not DDC-imputed) data
+        np.testing.assert_array_equal(model.X_, self.X_cont)
+        np.testing.assert_array_equal(model.y_, self.y_cont)
+
 
 @pytest.mark.gpu
 class TestCRMGPU(unittest.TestCase):
