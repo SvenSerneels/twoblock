@@ -84,8 +84,13 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
     start_cellwise : bool, default False
         If True, use cellwise robust starting values via DDC (DetectDeviatingCells)
         from robpy. DDC detects cellwise outliers and imputes them before
-        computing initial estimates. Requires robpy package.
+        computing initial estimates. Requires robpy package. Note that this 
+        option is the only option that will make this method cellwise robust
+        also in case that leads to more than half of rows containing contaminated 
+        cells.
+        
         If False (default), use casewise robust starting values (MM or LTS).
+        This is the option that corresponds to the 2020 paper (Filzmoser et al.).
 
     gpu : bool, default False
         Enable GPU acceleration via CuPy.
