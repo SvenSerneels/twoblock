@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Sparse twoblock with soft-thresholding variable selection (Serneels, 2025)
 - Robust twoblock (`rtb`) with iterative M-estimation reweighting (Serneels, 2025)
 - SPADIMO (`spadimo`) for identifying outlier-contributing variables
+- CRM (`crm`) for cellwise robust M-regression (Filzmoser et al., 2020)
 - Optional GPU acceleration via CuPy
 
 ## Build & Install
@@ -43,11 +44,12 @@ flake8 . --max-complexity=10 --max-line-length=127  # full lint
   - `twoblock.py` - main `twoblock` class (extends sklearn's `BaseEstimator`, `TransformerMixin`, `RegressorMixin`, `MultiOutputMixin`). Implements `fit(X, Y)` and `predict(Xn)`. The fit method runs two sequential SVD-based deflation loops (one for X components, one for Y components) with optional sparsity via soft-thresholding controlled by `eta_x`/`eta_y`.
   - `rtb.py` - robust twoblock class with iterative M-estimation reweighting; supports Hampel, Fair, and Huber downweighting functions
   - `spadimo.py` - SPADIMO (SPArse DIrections of Maximal Outlyingness) class for identifying which variables contribute to an observation being an outlier; supports multiple robust scale estimators (Qn, MAD, scaleTau2) and GPU acceleration
+  - `crm.py` - CRM (Cellwise Robust M-regression) class for regression robust to cellwise outliers; uses IRLS with SPADIMO for cellwise outlier detection, supports MM and LTS initial estimates
   - `prepro.py` - `VersatileScaler` class for flexible centering/scaling (mean/median/l1median, std/mad/scaleTau2)
   - `utils.py` - input validation helpers (`_check_input`, `_predict_check_input`) and M-estimation weighting functions (Fair, Huber, Hampel)
   - `_preproc_utilities.py` - robust centering/scaling functions (mean, median, l1median, MAD, Qn, scaleTau2, kstepLTS, `scale_data`)
   - `_gpu_utils.py` - CuPy/NumPy array module abstraction for GPU acceleration
-  - `__init__.py` - exports `twoblock`, `rtb`, and `spadimo` classes; defines `__version__`
+  - `__init__.py` - exports `twoblock`, `rtb`, `spadimo`, and `crm` classes; defines `__version__`
 
 ## Key Conventions
 

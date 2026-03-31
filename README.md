@@ -9,6 +9,8 @@ The robust version (`rtb`) extends twoblock with iterative M-estimation reweight
 
 The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [4].
 
+The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [5].
+
 ## Installation
 
 ```bash
@@ -128,6 +130,56 @@ Key parameters:
 - `stop_early`: Stop at first eta where observation becomes non-outlying
 - `csq_critv`: Chi-squared quantile for outlyingness threshold (default: 0.975)
 
+### crm — Cellwise Robust M-regression
+
+CRM detects and handles cellwise outliers - individual contaminated cells rather than entire rows. It provides regression coefficients robust against both vertical outliers and leverage points, a map of cellwise outliers, and an imputed dataset with outlying cells replaced.
+
+```python
+from twoblock import crm
+import numpy as np
+
+# Fit CRM model
+model = crm(center='median', scale='Qn', fun='Hampel')
+model.fit(X, y)
+
+# Predictions
+y_pred = model.predict(X_new)
+
+# View cellwise outlier map
+print(f"Cellwise outliers detected: {np.sum(model.cellwise_outliers_)}")
+print(f"Casewise outliers: {model.get_casewise_outliers()}")
+
+# Get imputed data (outlying cells replaced)
+X_imputed = model.X_imputed_
+
+# Inspect which cells are outliers for a specific row
+row_outliers = model.get_cellwise_outliers(row=0)
+print(f"Outlying variables in row 0: {row_outliers}")
+
+# With a DataFrame, get variable names
+model.fit(X_df, y)
+print(model.get_cellwise_outliers(row=0, names=True))
+
+# Print summary
+model.summary()
+```
+
+Key parameters:
+- `center`: Centering method ('median', 'mean', 'l1median')
+- `scale`: Scale estimator ('Qn', 'mad', 'scaleTau2')
+- `regtype`: Initial regression type ('MM', 'LTS')
+- `fun`: M-estimation psi-function ('Hampel', 'Huber', 'Fair')
+- `crit_cellwise`: Chi-squared quantile for cellwise outlier detection (default: 0.99)
+- `maxiter`: Maximum IRLS iterations (default: 100)
+- `tolerance`: Convergence threshold (default: 0.01)
+
+Key attributes:
+- `coef_`: Regression coefficients
+- `cellwise_outliers_`: Boolean matrix of cell outliers (n, p)
+- `casewise_outliers_`: Boolean array of row outliers (n,)
+- `X_imputed_`: Imputed X matrix with outliers replaced
+- `caseweights_`: Case weights from M-estimation
+
 ## Examples
 
 Example notebooks are provided in the [`examples/`](examples/) folder:
@@ -149,6 +201,10 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 [3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
 (2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
 
-[4] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which 
-    variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5) 
+[4] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
+    variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5)
     Statistics and Computing 29 (4), 707-723.
+
+[5] P. Filzmoser, S. Höppner, I. Ortner, S. Serneels, T. Verdonck. ["Cellwise Robust
+    M regression."](https://doi.org/10.1016/j.csda.2020.106944) Computational
+    Statistics & Data Analysis 147 (2020): 106944.
