@@ -138,9 +138,14 @@ CRM detects and handles cellwise outliers - individual contaminated cells rather
 from twoblock import crm
 import numpy as np
 
-# Fit CRM model
+# Fit CRM model with casewise robust starting values (default)
 model = crm(center='median', scale='Qn', fun='Hampel')
 model.fit(X, y)
+
+# Fit CRM with cellwise robust starting values via DDC
+# (requires robpy: pip install robpy)
+model_ddc = crm(start_cellwise=True, center='median', scale='Qn')
+model_ddc.fit(X, y)
 
 # Predictions
 y_pred = model.predict(X_new)
@@ -165,6 +170,7 @@ model.summary()
 ```
 
 Key parameters:
+- `start_cellwise`: If True, use DDC for cellwise robust starting values (default: False, requires robpy)
 - `center`: Centering method ('median', 'mean', 'l1median')
 - `scale`: Scale estimator ('Qn', 'mad', 'scaleTau2')
 - `regtype`: Initial regression type ('MM', 'LTS')
@@ -179,6 +185,7 @@ Key attributes:
 - `casewise_outliers_`: Boolean array of row outliers (n,)
 - `X_imputed_`: Imputed X matrix with outliers replaced
 - `caseweights_`: Case weights from M-estimation
+- `ddc_outliers_`: Cellwise outliers from DDC initialization (if `start_cellwise=True`)
 
 ## Examples
 
@@ -186,6 +193,7 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 - `cookie_example.ipynb` — Cookie dough NIR spectroscopy
 - `gas_turbine_example.ipynb` — Gas turbine CO/NOx emissions
 - `simulation_rtb.ipynb` — Simulation study comparing twoblock, sparse twoblock, rtb, and sparse rtb
+- `crm_simulation.ipynb` — CRM simulation under cellwise contamination with normal and Cauchy noise
 
 ## References
 
