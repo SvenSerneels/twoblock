@@ -7,6 +7,10 @@ The sparse version is a `scikit-learn` compatible implementation of sparse twobl
 
 The robust version (`rtb`) extends twoblock with iterative M-estimation reweighting, providing resistance to outliers in both X and Y blocks [3].
 
+The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [4].
+
+The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [5].
+
 ## Installation
 
 ```bash
@@ -88,16 +92,112 @@ gcv = GridSearchCV(rtb(verbose=False),
 gcv.fit(X_train, Y_train)
 ```
 
+### spadimo — Sparse directions of maximal outlyingness
+
+SPADIMO identifies which variables contribute most to making an observation an outlier. Given case weights from a robust estimator (e.g., `rtb`), it computes a sparse direction of maximal outlyingness and flags the contributing variables.
+
+```python
+from twoblock import rtb, spadimo
+
+# First, fit a robust model to get case weights
+r = rtb(n_components_x=5, n_components_y=2,
+        centre='l1median', scale='mad', fun='Hampel')
+r.fit(X, Y)
+
+# Find observations with low weights (potential outliers)
+outlier_indices = np.where(r.caseweights_ < 0.5)[0]
+
+# Analyze an outlier to find contributing variables
+sp = spadimo(scale='Qn', stop_early=True)
+sp.fit(X, r.caseweights_, obs=outlier_indices[0])
+
+# Get the flagged variables
+print(f"Outlying variables: {sp.outlvars_}")
+print(f"Outlyingness before: {sp.outlyingness_before_:.2f}")
+print(f"Outlyingness after removing flagged vars: {sp.outlyingness_after_:.2f}")
+
+# With a DataFrame, get variable names directly
+sp.fit(X_df, r.caseweights_, obs=outlier_indices[0])
+print(f"Outlying variable names: {sp.get_outlying_variables(names=True)}")
+
+# Print a summary
+sp.summary()
+```
+
+Key parameters:
+- `scale`: Robust scale estimator ('Qn', 'mad', 'scaleTau2')
+- `etas`: Sparsity parameters (default: sequence from 0.9 to 0.1)
+- `stop_early`: Stop at first eta where observation becomes non-outlying
+- `csq_critv`: Chi-squared quantile for outlyingness threshold (default: 0.975)
+
+### crm — Cellwise Robust M-regression
+
+CRM detects and handles cellwise outliers - individual contaminated cells rather than entire rows. It provides regression coefficients robust against both vertical outliers and leverage points, a map of cellwise outliers, and an imputed dataset with outlying cells replaced.
+
+```python
+from twoblock import crm
+import numpy as np
+
+# Fit CRM model with casewise robust starting values (default)
+model = crm(center='median', scale='Qn', fun='Hampel')
+model.fit(X, y)
+
+# Fit CRM with cellwise robust starting values via DDC
+# (requires robpy: pip install robpy)
+model_ddc = crm(start_cellwise=True, center='median', scale='Qn')
+model_ddc.fit(X, y)
+
+# Predictions
+y_pred = model.predict(X_new)
+
+# View cellwise outlier map
+print(f"Cellwise outliers detected: {np.sum(model.cellwise_outliers_)}")
+print(f"Casewise outliers: {model.get_casewise_outliers()}")
+
+# Get imputed data (outlying cells replaced)
+X_imputed = model.X_imputed_
+
+# Inspect which cells are outliers for a specific row
+row_outliers = model.get_cellwise_outliers(row=0)
+print(f"Outlying variables in row 0: {row_outliers}")
+
+# With a DataFrame, get variable names
+model.fit(X_df, y)
+print(model.get_cellwise_outliers(row=0, names=True))
+
+# Print summary
+model.summary()
+```
+
+Key parameters:
+- `start_cellwise`: If True, use DDC for cellwise robust starting values (default: False, requires robpy)
+- `center`: Centering method ('median', 'mean', 'l1median')
+- `scale`: Scale estimator ('Qn', 'mad', 'scaleTau2')
+- `regtype`: Initial regression type ('MM', 'LTS')
+- `fun`: M-estimation psi-function ('Hampel', 'Huber', 'Fair')
+- `crit_cellwise`: Chi-squared quantile for cellwise outlier detection (default: 0.99)
+- `maxiter`: Maximum IRLS iterations (default: 100)
+- `tolerance`: Convergence threshold (default: 0.01)
+
+Key attributes:
+- `coef_`: Regression coefficients
+- `cellwise_outliers_`: Boolean matrix of cell outliers (n, p)
+- `casewise_outliers_`: Boolean array of row outliers (n,)
+- `X_imputed_`: Imputed X matrix with outliers replaced
+- `caseweights_`: Case weights from M-estimation
+- `ddc_outliers_`: Cellwise outliers from DDC initialization (if `start_cellwise=True`)
+
 ## Examples
 
 Example notebooks are provided in the [`examples/`](examples/) folder:
 - `cookie_example.ipynb` — Cookie dough NIR spectroscopy
 - `gas_turbine_example.ipynb` — Gas turbine CO/NOx emissions
 - `simulation_rtb.ipynb` — Simulation study comparing twoblock, sparse twoblock, rtb, and sparse rtb
+- `crm_simulation.ipynb` — CRM simulation under cellwise contamination with normal and Cauchy noise
 
 ## References
 
-[1] Cook, R. Dennis, Liliana Forzani, and Lan Liu.
+[1] R.D. Cook, L. Forzani, L. Liu.
     ["Partial least squares for simultaneous reduction of response and predictor
     vectors in regression."](https://doi.org/10.1016/j.jmva.2023.105163) Journal
     of Multivariate Analysis 196 (2023): 105163.
@@ -108,3 +208,11 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 
 [3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
 (2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
+
+[4] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
+    variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5)
+    Statistics and Computing 29 (4), 707-723.
+
+[5] P. Filzmoser, S. Höppner, I. Ortner, S. Serneels, T. Verdonck. ["Cellwise Robust
+    M regression."](https://doi.org/10.1016/j.csda.2020.106944) Computational
+    Statistics & Data Analysis 147 (2020): 106944.
