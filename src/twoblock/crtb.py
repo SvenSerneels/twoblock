@@ -275,8 +275,10 @@ class crtb(rtb):
         # --- Cellwise starting values via DDC (optional) ---
         ddc_x_outliers = None
         ddc_y_outliers = None
-        X_fit = X.astype("float64")
-        Y_fit = Y.astype("float64")
+        X_orig = X.astype("float64")
+        Y_orig = Y.astype("float64")
+        X_fit = X_orig.copy()
+        Y_fit = Y_orig.copy()
 
         if self.start_cellwise:
             if self.verbose:
@@ -284,18 +286,32 @@ class crtb(rtb):
             X_fit, ddc_x_outliers = self._ddc_impute(X_fit, "X")
             Y_fit, ddc_y_outliers = self._ddc_impute(Y_fit, "Y")
 
-        # --- Robust centering and scaling (on possibly DDC-imputed data) ---
+        # --- Robust centering and scaling ---
+        # loc/sca are estimated on the original contaminated data: robust
+        # estimators (scaleTau2, l1median) have a ~50% breakdown point so they
+        # handle the 10-30% cell contamination expected in practice.  Using
+        # DDC-imputed data for scaling can produce artificially small scale
+        # estimates when DDC over-imputes a variable, which would amplify noise
+        # in the final coefficient rescaling.
         scaling = VersatileScaler(center=self.centre, scale=self.scale)
-        Xs = scaling.fit_transform(X_fit).astype("float64")
+        Xs = scaling.fit_transform(X_orig).astype("float64")
         mX = scaling.col_loc_
         sX = scaling.col_sca_
-        Ys = scaling.fit_transform(Y_fit).astype("float64")
+        Ys = scaling.fit_transform(Y_orig).astype("float64")
         my = scaling.col_loc_
         sy = scaling.col_sca_
 
+        from ._preproc_utilities import scale_data
+
+        # Starting case weights use DDC-imputed data (same loc/sca) so that
+        # heavily contaminated rows do not corrupt the brokenstick PCA
+        # initialisation of the M-estimation loop.
+        Xs_init = scale_data(X_fit, mX, sX).astype("float64")
+        Ys_init = scale_data(Y_fit, my, sy).astype("float64")
+
         # --- Starting case weights ---
-        we = self._compute_starting_weights(Xs, scaling, n, p)
-        wf = self._compute_starting_weights(Ys, scaling, n, q)
+        we = self._compute_starting_weights(Xs_init, scaling, n, p)
+        wf = self._compute_starting_weights(Ys_init, scaling, n, q)
 
         # --- Cellwise weight matrices (1 = clean, 0 = outlying cell) ---
         cell_wx = np.ones((n, p), dtype=np.float64)
@@ -313,8 +329,11 @@ class crtb(rtb):
         # Combined per-cell weight matrix:  WEmat[i,j] = sqrt(case_w[i] * cell_w[i,j])
         WEmat_x = np.sqrt(we[:, np.newaxis] * cell_wx)
         WEmat_y = np.sqrt(wf[:, np.newaxis] * cell_wy)
-        Xw = (Xs * WEmat_x).astype("float64")
-        Yw = (Ys * WEmat_y).astype("float64")
+        # Use DDC-imputed Xs_init for the twoblock fit so that undetected cells
+        # in low-scale variables (which may be extreme in the original Xs) do
+        # not dominate the SVD when their case weight has not yet been reduced.
+        Xw = (Xs_init * WEmat_x).astype("float64")
+        Yw = (Ys_init * WEmat_y).astype("float64")
 
         scalingt = copy.deepcopy(scaling)
         scalingu = copy.deepcopy(scaling)
@@ -340,19 +359,25 @@ class crtb(rtb):
         while (difference > self.tol) and (loops < self.maxit):
             res_tb.fit(Xw, Yw)
 
-            # Unweighted scores: project scaled data onto current weight vectors.
-            # With per-cell weights, Xw = Xs * WEmat_x is not a simple row-scaling,
-            # so we cannot recover Xs-scores by dividing the weighted scores by a
-            # scalar per row.  We compute them directly instead.
+            # Dual-reference scores for case-weight update:
+            #   T_ref  = Xs_init @ weights  (DDC-imputed, "clean" reference)
+            #   T_cont = Xs @ weights       (original contaminated data)
+            # scalingt is fit on T_ref so the Hampel cutoffs are calibrated to
+            # the clean distribution.  Rows with undetected contamination then
+            # produce elevated distances and get downweighted correctly.
+            # When start_cellwise=False, Xs_init=Xs so T_ref=T_cont and the
+            # behaviour is identical to the single-reference case.
+            Tx_ref = np.matmul(Xs_init, res_tb.x_weights_)
+            Ty_ref = np.matmul(Ys_init, res_tb.y_weights_)
             Tx = np.matmul(Xs, res_tb.x_weights_)
             Ty = np.matmul(Ys, res_tb.y_weights_)
 
             # Case weight update + normalized distances for SPADIMO flagging
             wte, dists_x = self._update_weights_unweighted(
-                Tx, self.n_components_x, scalingt
+                Tx, self.n_components_x, scalingt, T_ref=Tx_ref
             )
             wue, dists_y = self._update_weights_unweighted(
-                Ty, self.n_components_y, scalingu
+                Ty, self.n_components_y, scalingu, T_ref=Ty_ref
             )
 
             b = res_tb.coef_scaled_
@@ -419,8 +444,8 @@ class crtb(rtb):
             # Rebuild combined weight matrices and weighted data
             WEmat_x = np.sqrt(we[:, np.newaxis] * cell_wx)
             WEmat_y = np.sqrt(wf[:, np.newaxis] * cell_wy)
-            Xw = (Xs * WEmat_x).astype("float64")
-            Yw = (Ys * WEmat_y).astype("float64")
+            Xw = (Xs_init * WEmat_x).astype("float64")
+            Yw = (Ys_init * WEmat_y).astype("float64")
             loops += 1
 
         if difference > self.tol:
@@ -691,7 +716,7 @@ class crtb(rtb):
             )
         return Z_imputed
 
-    def _update_weights_unweighted(self, T, n_components, scalingt):
+    def _update_weights_unweighted(self, T, n_components, scalingt, T_ref=None):
         """
         Compute case weights from unweighted score matrix T.
 
@@ -705,25 +730,46 @@ class crtb(rtb):
         Parameters
         ----------
         T : ndarray (n, n_components)
-            Unweighted scores.
+            Unweighted scores from original (possibly contaminated) data.
         n_components : int
             Number of components (used for chi2 cutoffs).
         scalingt : VersatileScaler
             Scaler used to robustly center/scale the scores column-wise.
+        T_ref : ndarray (n, n_components) or None
+            Clean reference scores (e.g. from DDC-imputed data).  When
+            provided, scalingt is fit on T_ref so the Hampel cutoffs are
+            calibrated to the clean distribution.  Rows with undetected
+            contamination in T then show elevated distances relative to this
+            reference and get properly downweighted.  When None (or when
+            T_ref is the same array as T, i.e. start_cellwise=False) the
+            behaviour reduces to fitting scalingt on T itself.
 
         Returns
         -------
         wte : ndarray (n,)
             Updated case weights from the M-estimation function.
         wtn : ndarray (n,)
-            Normalized score distances (median = 1) used to select
-            observations for SPADIMO.
+            Normalized score distances used to select observations for SPADIMO.
         """
         if self.scale == "None":
             scalingt.set_params(scale="mad")
-        dt = scalingt.fit_transform(T)
+        if T_ref is not None:
+            # Fit on clean reference; transform the (possibly contaminated) T
+            dt_ref = scalingt.fit_transform(T_ref)
+            ref_norms = np.sqrt(
+                np.array(np.sum(np.square(dt_ref), 1), dtype=np.float64)
+            )
+            ref_med = float(np.median(ref_norms))
+            if ref_med < 1e-10:
+                ref_med = 1.0
+            dt = scalingt.transform(T)
+        else:
+            dt = scalingt.fit_transform(T)
         wtn = np.sqrt(np.array(np.sum(np.square(dt), 1), dtype=np.float64))
-        wtn = wtn / np.median(wtn)
+        if T_ref is not None:
+            wtn = wtn / ref_med
+        else:
+            wtn = wtn / np.median(wtn)
         wtn = wtn.reshape(-1)
 
         if self.fun == "Fair":

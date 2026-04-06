@@ -257,13 +257,14 @@ def scaleTau2(x0, c1=4.5, c2=3, consistency=True, **kwargs):
         xc /= sigma0 * c1
         w = 1 - np.square(xc)
         w = np.square((abs(w) + w) / 2)
-        mu = summ(np.multiply(x, w)) / summ(w)
+        # per-column weighted mean
+        mu = summ(np.multiply(x, w), axis=0) / summ(w, axis=0)
     else:
         mu = medx
     x -= mu
     x /= sigma0
     rho = np.square(x)
-    rho[np.where(rho > c2**2)[0]] = c2**2
+    rho[rho > c2**2] = c2**2          # element-wise clipping
     if consistency:
 
         def Erho(b):
@@ -281,7 +282,7 @@ def scaleTau2(x0, c1=4.5, c2=3, consistency=True, **kwargs):
             nEs2 = n * Es2(c2)
     else:
         nEs2 = n
-    return np.array(sigma0 * np.sqrt(summ(rho) / nEs2)).reshape((p,))
+    return np.array(sigma0 * np.sqrt(summ(rho, axis=0) / nEs2)).reshape((p,))
 
 
 def Qn(X, c=2.21914, **kwargs):
