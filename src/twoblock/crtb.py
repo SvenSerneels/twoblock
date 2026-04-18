@@ -96,12 +96,16 @@ class crtb(rtb):
     gpu : bool, default False
         Enable GPU acceleration via CuPy.
 
-    start_cellwise : bool, default False
-        If True, run DDC (from robpy) on X and Y before computing starting
-        case weights. DDC imputes cellwise outliers so that robust centering,
-        scaling, and brokenstick PCA are not distorted by them. This is the
-        recommended option when more than half the rows may contain
-        contaminated cells. Requires the robpy package.
+    start_cellwise : str or False, default 'prefilter'
+        Cellwise robust starting value strategy.
+        - 'prefilter' : fast column-wise MAD-based pre-filter (default).
+          Flags cells whose |z-score| exceeds the crit_cellwise quantile,
+          then zeroes them before computing starting case weights.
+        - 'DDC' : run DDC (from robpy) on X and Y before computing starting
+          case weights. DDC imputes cellwise outliers so that robust
+          centering, scaling, and brokenstick PCA are not distorted by them.
+          Requires the robpy package. Slower but potentially more accurate.
+        - False or None : no cellwise pre-treatment of starting values.
 
     spadieta : array-like or None, default None
         Sparsity parameter sequence passed to SPADIMO. If None, uses
@@ -145,8 +149,8 @@ class crtb(rtb):
     y_cellwise_outliers_ : ndarray of bool (n, q)
         Boolean map of Y-block cellwise outliers.
     ddc_x_outliers_ : ndarray of bool (n, p) or None
-        Cellwise outlier map from DDC for X (set only when start_cellwise=True
-        and robpy is available).
+        Cellwise outlier map from DDC for X (set only when
+        start_cellwise='DDC' and robpy is available).
     ddc_y_outliers_ : ndarray of bool (n, q) or None
         Cellwise outlier map from DDC for Y.
     centring_ : VersatileScaler
@@ -174,7 +178,7 @@ class crtb(rtb):
         start_X_init="pcapp",
         copy=True,
         gpu=False,
-        start_cellwise=False,
+        start_cellwise="prefilter",
         spadieta=None,
         crit_cellwise=0.99,
     ):
@@ -268,9 +272,28 @@ class crtb(rtb):
         )
         spadi_scale = self.scale if self.scale != "None" else "mad"
 
-        # Distance thresholds for SPADIMO observation selection
-        chi2_thr_x = np.sqrt(chi2.ppf(self.crit_cellwise, self.n_components_x))
-        chi2_thr_y = np.sqrt(chi2.ppf(self.crit_cellwise, self.n_components_y))
+        # Cellwise detection threshold for the column-wise pre-filter.
+        from scipy.stats import norm
+        prefilter_thr = norm.ppf((1 + self.crit_cellwise) / 2)
+
+        # Normalise start_cellwise to a canonical value
+        _sc = self.start_cellwise
+        if _sc is True:
+            _sc = "prefilter"  # back-compat: True -> prefilter
+        elif _sc is None or _sc is False:
+            _sc = False
+        elif isinstance(_sc, str):
+            _sc = _sc.lower()
+            if _sc not in ("prefilter", "ddc"):
+                raise ValueError(
+                    "start_cellwise must be 'prefilter', 'DDC', False or None, "
+                    f"got {self.start_cellwise!r}"
+                )
+        else:
+            raise ValueError(
+                "start_cellwise must be 'prefilter', 'DDC', False or None, "
+                f"got {self.start_cellwise!r}"
+            )
 
         # --- Cellwise starting values via DDC (optional) ---
         ddc_x_outliers = None
@@ -280,7 +303,7 @@ class crtb(rtb):
         X_fit = X_orig.copy()
         Y_fit = Y_orig.copy()
 
-        if self.start_cellwise:
+        if _sc == "ddc":
             if self.verbose:
                 print("Computing cellwise starting values via DDC...")
             X_fit, ddc_x_outliers = self._ddc_impute(X_fit, "X")
@@ -309,31 +332,64 @@ class crtb(rtb):
         Xs_init = scale_data(X_fit, mX, sX).astype("float64")
         Ys_init = scale_data(Y_fit, my, sy).astype("float64")
 
+        # --- Column-wise pre-filter ---
+        # When start_cellwise is 'prefilter' or 'ddc', flag cells whose
+        # absolute value in the scaled data exceeds prefilter_thr × 1.4826
+        # × column-MAD.  This is a fast, model-free pre-filter that catches
+        # gross cellwise outliers before the first twoblock iteration,
+        # giving the M-estimation loop a much cleaner starting model.
+        if _sc:
+            col_prefilter_x = self._columnwise_prefilter(Xs, prefilter_thr)
+            col_prefilter_y = self._columnwise_prefilter(Ys, prefilter_thr)
+        else:
+            col_prefilter_x = np.zeros((n, p), dtype=bool)
+            col_prefilter_y = np.zeros((n, q), dtype=bool)
+
         # --- Starting case weights ---
-        we = self._compute_starting_weights(Xs_init, scaling, n, p)
-        wf = self._compute_starting_weights(Ys_init, scaling, n, q)
+        # Compute starting weights from data with pre-filtered cells
+        # zeroed out so that contaminated rows do not corrupt the
+        # brokenstick PCA or distance normalisation.
+        Xs_start = Xs_init.copy()
+        Ys_start = Ys_init.copy()
+        Xs_start[col_prefilter_x] = 0.0
+        Ys_start[col_prefilter_y] = 0.0
+        we = self._compute_starting_weights(Xs_start, scaling, n, p)
+        wf = self._compute_starting_weights(Ys_start, scaling, n, q)
 
         # --- Cellwise weight matrices (1 = clean, 0 = outlying cell) ---
+        # The prefilter flags are kept as a persistent floor: the
+        # reconstruction-residual step in the M-estimation loop can ADD
+        # newly detected outliers but cannot un-flag cells that the
+        # prefilter (or DDC) already identified.  This prevents the
+        # model-based detection from losing track of gross outliers
+        # that the model's reconstruction partially absorbs.
         cell_wx = np.ones((n, p), dtype=np.float64)
         cell_wy = np.ones((n, q), dtype=np.float64)
-        x_cellwise_outliers = np.zeros((n, p), dtype=bool)
-        y_cellwise_outliers = np.zeros((n, q), dtype=bool)
+        x_cellwise_floor = col_prefilter_x.copy()
+        y_cellwise_floor = col_prefilter_y.copy()
 
         if ddc_x_outliers is not None:
-            cell_wx[ddc_x_outliers] = 0.0
-            x_cellwise_outliers |= ddc_x_outliers
+            x_cellwise_floor |= ddc_x_outliers
         if ddc_y_outliers is not None:
-            cell_wy[ddc_y_outliers] = 0.0
-            y_cellwise_outliers |= ddc_y_outliers
+            y_cellwise_floor |= ddc_y_outliers
 
-        # Combined per-cell weight matrix:  WEmat[i,j] = sqrt(case_w[i] * cell_w[i,j])
-        WEmat_x = np.sqrt(we[:, np.newaxis] * cell_wx)
-        WEmat_y = np.sqrt(wf[:, np.newaxis] * cell_wy)
-        # Use DDC-imputed Xs_init for the twoblock fit so that undetected cells
-        # in low-scale variables (which may be extreme in the original Xs) do
-        # not dominate the SVD when their case weight has not yet been reduced.
-        Xw = (Xs_init * WEmat_x).astype("float64")
-        Yw = (Ys_init * WEmat_y).astype("float64")
+        x_cellwise_outliers = x_cellwise_floor.copy()
+        y_cellwise_outliers = y_cellwise_floor.copy()
+
+        cell_wx[x_cellwise_outliers] = 0.0
+        cell_wy[y_cellwise_outliers] = 0.0
+
+        # Build weighted data for the initial twoblock fit.
+        # Flagged cells (from prefilter and/or DDC) are set to zero
+        # (= column mean in centered space).
+        Xs_imp = Xs_init.copy()
+        Ys_imp = Ys_init.copy()
+        Xs_imp[x_cellwise_outliers] = 0.0
+        Ys_imp[y_cellwise_outliers] = 0.0
+        WEsqrt_x = np.sqrt(we)[:, np.newaxis]
+        WEsqrt_y = np.sqrt(wf)[:, np.newaxis]
+        Xw = (Xs_imp * WEsqrt_x).astype("float64")
+        Yw = (Ys_imp * WEsqrt_y).astype("float64")
 
         scalingt = copy.deepcopy(scaling)
         scalingu = copy.deepcopy(scaling)
@@ -365,19 +421,23 @@ class crtb(rtb):
             # scalingt is fit on T_ref so the Hampel cutoffs are calibrated to
             # the clean distribution.  Rows with undetected contamination then
             # produce elevated distances and get downweighted correctly.
-            # When start_cellwise=False, Xs_init=Xs so T_ref=T_cont and the
+            # When start_cellwise is False, Xs_init=Xs so T_ref=T_cont and the
             # behaviour is identical to the single-reference case.
             Tx_ref = np.matmul(Xs_init, res_tb.x_weights_)
             Ty_ref = np.matmul(Ys_init, res_tb.y_weights_)
             Tx = np.matmul(Xs, res_tb.x_weights_)
             Ty = np.matmul(Ys, res_tb.y_weights_)
 
-            # Case weight update + normalized distances for SPADIMO flagging
+            # Case weight update + normalized distances for SPADIMO flagging.
+            # Pass prior case weights so the distance-normalization median is
+            # anchored in the clean population even at high row contamination.
             wte, dists_x = self._update_weights_unweighted(
-                Tx, self.n_components_x, scalingt, T_ref=Tx_ref
+                Tx, self.n_components_x, scalingt,
+                T_ref=Tx_ref, prior_weights=we,
             )
             wue, dists_y = self._update_weights_unweighted(
-                Ty, self.n_components_y, scalingu, T_ref=Ty_ref
+                Ty, self.n_components_y, scalingu,
+                T_ref=Ty_ref, prior_weights=wf,
             )
 
             b = res_tb.coef_scaled_
@@ -407,45 +467,32 @@ class crtb(rtb):
             if len(w0) >= (n / 2):
                 break
 
-            # --- Cellwise outlier detection via SPADIMO ---
-            # Cells accumulate: once flagged they remain at zero.
-            for i in np.where(dists_x > chi2_thr_x)[0]:
-                try:
-                    sp = spadimo(
-                        scale=spadi_scale,
-                        etas=spadieta,
-                        stop_early=True,
-                        gpu=self.gpu,
-                        copy=False,
-                    )
-                    sp.fit(Xs, we, obs=int(i))
-                    if len(sp.outlvars_) > 0:
-                        x_cellwise_outliers[i, sp.outlvars_] = True
-                        cell_wx[i, sp.outlvars_] = 0.0
-                except Exception:
-                    pass
+            # --- Cellwise outlier map ---
+            # The prefilter provides the cell detection.  The map is kept
+            # fixed throughout the M-estimation loop: the prefilter is a
+            # model-free column-wise detector (|Xs[i,j]| > thr × MAD_j)
+            # that is reliable regardless of the model quality, whereas
+            # reconstruction-residual updates depend on a converged model
+            # and can over-flag noise variables whose loadings are near
+            # zero.  Keeping the map fixed avoids positive-feedback
+            # accumulation of false positives.
 
-            for i in np.where(dists_y > chi2_thr_y)[0]:
-                try:
-                    sp = spadimo(
-                        scale=spadi_scale,
-                        etas=spadieta,
-                        stop_early=True,
-                        gpu=self.gpu,
-                        copy=False,
-                    )
-                    sp.fit(Ys, wf, obs=int(i))
-                    if len(sp.outlvars_) > 0:
-                        y_cellwise_outliers[i, sp.outlvars_] = True
-                        cell_wy[i, sp.outlvars_] = 0.0
-                except Exception:
-                    pass
-
-            # Rebuild combined weight matrices and weighted data
-            WEmat_x = np.sqrt(we[:, np.newaxis] * cell_wx)
-            WEmat_y = np.sqrt(wf[:, np.newaxis] * cell_wy)
-            Xw = (Xs_init * WEmat_x).astype("float64")
-            Yw = (Ys_init * WEmat_y).astype("float64")
+            # Impute flagged cells from the current model, then apply
+            # case weights.
+            Xs_imp = Xs_init.copy()
+            Ys_imp = Ys_init.copy()
+            self._impute_cells_from_model(
+                Xs_imp, x_cellwise_outliers,
+                res_tb.x_weights_, res_tb.x_loadings_,
+            )
+            self._impute_cells_from_model(
+                Ys_imp, y_cellwise_outliers,
+                res_tb.y_weights_, res_tb.y_loadings_,
+            )
+            WEsqrt_x = np.sqrt(we)[:, np.newaxis]
+            WEsqrt_y = np.sqrt(wf)[:, np.newaxis]
+            Xw = (Xs_imp * WEsqrt_x).astype("float64")
+            Yw = (Ys_imp * WEsqrt_y).astype("float64")
             loops += 1
 
         if difference > self.tol:
@@ -514,8 +561,10 @@ class crtb(rtb):
         setattr(self, "scalingt_", scalingt)
         setattr(self, "scalingu_", scalingu)
         # Cellwise-specific attributes
-        setattr(self, "x_cellweights_", cell_wx)
-        setattr(self, "y_cellweights_", cell_wy)
+        setattr(self, "x_cellweights_",
+                (~x_cellwise_outliers).astype(np.float64))
+        setattr(self, "y_cellweights_",
+                (~y_cellwise_outliers).astype(np.float64))
         setattr(self, "x_cellwise_outliers_", x_cellwise_outliers)
         setattr(self, "y_cellwise_outliers_", y_cellwise_outliers)
         setattr(self, "ddc_x_outliers_", ddc_x_outliers)
@@ -672,6 +721,126 @@ class crtb(rtb):
     # Private helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _columnwise_prefilter(Zs, threshold):
+        """
+        Column-wise outlier pre-filter on scaled data.
+
+        Flags cells where |Zs[i, j]| exceeds threshold × 1.4826 × MAD_j.
+        Since Zs is already robustly centered, |Zs[i,j]| is the distance
+        from the robust center.  This is a fast, model-free filter that
+        catches gross cellwise outliers before the first model-based
+        iteration.
+
+        Parameters
+        ----------
+        Zs : ndarray (n, d) — robustly centered and scaled data
+        threshold : float — flagging cutoff (same as crit_cellwise normal quantile)
+
+        Returns
+        -------
+        outliers : bool ndarray (n, d)
+        """
+        abs_z = np.abs(Zs)
+        col_mad = np.median(abs_z, axis=0)
+        col_mad[col_mad < 1e-10] = 1.0
+        sigma = 1.4826 * col_mad
+        return abs_z / sigma > threshold
+
+    @staticmethod
+    def _flag_cellwise_residuals(Zs, outlier_map, weights, loadings,
+                                 case_w, threshold):
+        """
+        Flag cellwise outliers based on reconstruction residuals.
+
+        Reconstruction: Zs_hat = (Zs @ weights) @ loadings.T
+        Residuals: R = Zs - Zs_hat
+        Column-wise robust scale: s_j = weighted MAD(R[:, j]) using case_w.
+        Cell (i, j) is flagged if |R[i, j]| / s_j > threshold.
+
+        Flags accumulate: once a cell is True it stays True.
+
+        Parameters
+        ----------
+        Zs : ndarray (n, d)   — scaled data
+        outlier_map : bool ndarray (n, d) — updated in-place
+        weights : ndarray (d, k)
+        loadings : ndarray (d, k)
+        case_w : ndarray (n,)  — current case weights (for weighted MAD)
+        threshold : float      — flagging threshold
+        """
+        n, d = Zs.shape
+        Zs_hat = (Zs @ weights) @ loadings.T
+        R = Zs - Zs_hat
+
+        # Recompute the outlier map from scratch each iteration rather than
+        # accumulating.  Early iterations have a poorer model and produce
+        # false positives that would persist under accumulation.
+        outlier_map[:] = False
+
+        for j in range(d):
+            col_r = np.abs(R[:, j])
+            # Weighted MAD: median of |r| weighted by case_w
+            idx = np.argsort(col_r)
+            cum_w = np.cumsum(case_w[idx])
+            half = cum_w[-1] / 2.0
+            pos = np.searchsorted(cum_w, half)
+            mad_j = float(col_r[idx[min(pos, n - 1)]])
+            if mad_j < 1e-10:
+                mad_j = float(np.median(col_r))
+            if mad_j < 1e-10:
+                continue
+            # Scale by 1.4826 so MAD estimates sigma for normal data
+            sigma_j = 1.4826 * mad_j
+            flagged = col_r / sigma_j > threshold
+            outlier_map[:, j] = flagged
+
+    @staticmethod
+    def _weighted_median(values, weights):
+        """Weighted median: the value where cumulative weight reaches 50 %."""
+        idx = np.argsort(values)
+        sv = values[idx]
+        sw = weights[idx]
+        cum = np.cumsum(sw)
+        half = cum[-1] / 2.0
+        pos = np.searchsorted(cum, half)
+        med = float(sv[min(pos, len(sv) - 1)])
+        return med if med > 1e-10 else 1.0
+
+    @staticmethod
+    def _impute_cells_from_model(Zs, outlier_map, weights, loadings):
+        """
+        In-place impute flagged cells in scaled data using the current model.
+
+        For each row with at least one flagged cell:
+          1. Zero out flagged cells (treat as column mean in centered space).
+          2. Project the clean portion onto weight vectors to get scores.
+          3. Reconstruct all variables via loadings.
+          4. Replace only the flagged cells with the reconstruction.
+
+        This avoids the artificial-zero distortion that occurs when flagged
+        cells are simply set to zero in the weighted data matrix fed to the SVD.
+
+        Parameters
+        ----------
+        Zs : ndarray (n, d)
+            Scaled data matrix, modified in-place.
+        outlier_map : bool ndarray (n, d)
+            True where a cell has been flagged as outlying.
+        weights : ndarray (d, k)
+        loadings : ndarray (d, k)
+        """
+        rows = np.where(outlier_map.any(axis=1))[0]
+        if len(rows) == 0:
+            return
+        for i in rows:
+            out_cols = outlier_map[i]
+            zs_clean = Zs[i].copy()
+            zs_clean[out_cols] = 0.0
+            t_i = zs_clean @ weights          # (k,)
+            zs_hat = t_i @ loadings.T         # (d,)
+            Zs[i, out_cols] = zs_hat[out_cols]
+
     def _impute_block(self, Z, outlier_map, loc, sca, weights, loadings):
         """
         Impute outlying cells in a single data block.
@@ -716,7 +885,8 @@ class crtb(rtb):
             )
         return Z_imputed
 
-    def _update_weights_unweighted(self, T, n_components, scalingt, T_ref=None):
+    def _update_weights_unweighted(self, T, n_components, scalingt,
+                                   T_ref=None, prior_weights=None):
         """
         Compute case weights from unweighted score matrix T.
 
@@ -741,8 +911,16 @@ class crtb(rtb):
             calibrated to the clean distribution.  Rows with undetected
             contamination in T then show elevated distances relative to this
             reference and get properly downweighted.  When None (or when
-            T_ref is the same array as T, i.e. start_cellwise=False) the
+            T_ref is the same array as T, i.e. no cellwise start) the
             behaviour reduces to fitting scalingt on T itself.
+        prior_weights : ndarray (n,) or None
+            Case weights from the previous iteration, used to compute a
+            weighted median for distance normalization.  When > 50 % of rows
+            are contaminated, the unweighted median of score distances is
+            inflated by outlying rows, compressing the distance scale and
+            hiding contaminated observations from SPADIMO.  Weighting the
+            median by prior case weights anchors it in the clean population.
+            When None, the ordinary (unweighted) median is used.
 
         Returns
         -------
@@ -768,6 +946,8 @@ class crtb(rtb):
         wtn = np.sqrt(np.array(np.sum(np.square(dt), 1), dtype=np.float64))
         if T_ref is not None:
             wtn = wtn / ref_med
+        elif prior_weights is not None and prior_weights.sum() > 0:
+            wtn = wtn / self._weighted_median(wtn, prior_weights)
         else:
             wtn = wtn / np.median(wtn)
         wtn = wtn.reshape(-1)
