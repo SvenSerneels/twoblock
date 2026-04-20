@@ -304,11 +304,11 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
     to Sparse PLS2 and CCA."](https://doi.org/10.1002/cem.70051) Journal of
     Chemometrics, 39 (2025): e70051.
 
-[3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
-(2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
+[3] S. Serneels. ["Robust Twoblock Dimension Reduction."](https://arxiv.org/pdf/2603.24820) 
+    (2026, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
 
-[4] S. Serneels. "Cellwise Robust Twoblock Dimension Reduction." (2026, in
-    preparation).
+[4] S. Serneels. ["Cellwise Robust Twoblock Dimension Reduction."](https://arxiv.org/pdf/2604.15106) 
+    (2026, submitted). Preprint available at arXiv.org,  arXiv: 2604.15106.
 
 [5] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
     variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5)
