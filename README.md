@@ -7,11 +7,11 @@ The sparse version is a `scikit-learn` compatible implementation of sparse twobl
 
 The robust version (`rtb`) extends twoblock with iterative M-estimation reweighting, providing resistance to outliers in both X and Y blocks [3].
 
+The cellwise robust version (`crtb`) extends `rtb` with per-cell outlier weighting for both X and Y blocks, using SPADIMO to identify contaminated cells within flagged observations [6].
+
 The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [4].
 
 The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [5].
-
-The cellwise robust version (`crtb`) extends `rtb` with per-cell outlier weighting for both X and Y blocks, using SPADIMO to identify contaminated cells within flagged observations [6].
 
 Optional `plotly`-based plot builders in `twoblock.plots` provide ready-made diagnostic figures (scree, scores, loadings, coefficients, predicted-vs-observed, case-weight histograms, cellwise-weight heatmaps, SPADIMO contributions).
 
@@ -95,6 +95,54 @@ gcv = GridSearchCV(rtb(verbose=False),
                    scoring='r2', cv=5)
 gcv.fit(X_train, Y_train)
 ```
+
+### crtb — Cellwise Robust Twoblock
+
+CRTB extends RTB with per-cell outlier weighting. In each M-estimation iteration, SPADIMO identifies which variables drive outlyingness for flagged observations, and those individual cells are downweighted while the row continues to contribute through its case weight. An optional DDC-based pre-treatment provides cellwise-robust starting values, pushing resistance beyond the 50 % row-contamination breakdown of row-wise methods.
+
+```python
+from twoblock import crtb
+import numpy as np
+
+# Default: fast column-wise MAD pre-filter for starting values
+c = crtb(n_components_x=5, n_components_y=2,
+         centre='l1median', scale='scaleTau2',
+         fun='Hampel', probp1=0.95, probp2=0.975, probp3=0.999,
+         start_cellwise='prefilter')
+c.fit(X_train, Y_train)
+Y_pred = c.predict(X_test)
+
+# DDC-based cellwise starting values (requires robpy)
+c_ddc = crtb(n_components_x=5, n_components_y=2,
+             centre='l1median', scale='scaleTau2',
+             start_cellwise='DDC', crit_cellwise=0.99)
+c_ddc.fit(X_train, Y_train)
+
+# Inspect row- and cell-level diagnostics
+print(f"Row case weights: {c.caseweights_}")
+print(f"X cellwise outliers: {np.sum(c.x_cellwise_outliers_)}")
+print(f"Y cellwise outliers: {np.sum(c.y_cellwise_outliers_)}")
+
+# Sparse CRTB — variable selection + cellwise robustness
+c_sparse = crtb(n_components_x=5, n_components_y=2,
+                sparse=True, eta_x=0.5, eta_y=0,
+                centre='l1median', scale='scaleTau2')
+c_sparse.fit(X_train, Y_train)
+
+# Impute outlying cells from the fitted model
+X_imputed, Y_imputed = c.impute(X_train, Y_train)
+```
+
+Key parameters:
+- `start_cellwise`: Cellwise starting-value strategy (`'prefilter'`, `'DDC'`, or `False`)
+- `crit_cellwise`: Chi-squared quantile used to flag cells and observations for SPADIMO (default 0.99)
+- `spadieta`: Sparsity sequence passed to SPADIMO (default `np.arange(0.9, 0.05, -0.1)`)
+- Inherits `fun`, `probp1/2/3`, `centre`, `scale`, `sparse`, `eta_x/y` from `rtb`
+
+Key attributes (in addition to those from `rtb`):
+- `x_cellwise_outliers_`, `y_cellwise_outliers_`: Boolean cell-outlier maps
+- `x_cellweights_`, `y_cellweights_`: Cellwise weights (0 = flagged, 1 = clean)
+- `ddc_x_outliers_`, `ddc_y_outliers_`: Cellwise outliers from DDC initialisation (if `start_cellwise='DDC'`)
 
 ### spadimo — Sparse directions of maximal outlyingness
 
@@ -190,54 +238,6 @@ Key attributes:
 - `X_imputed_`: Imputed X matrix with outliers replaced
 - `caseweights_`: Case weights from M-estimation
 - `ddc_outliers_`: Cellwise outliers from DDC initialization (if `start_cellwise=True`)
-
-### crtb — Cellwise Robust Twoblock
-
-CRTB extends RTB with per-cell outlier weighting. In each M-estimation iteration, SPADIMO identifies which variables drive outlyingness for flagged observations, and those individual cells are downweighted while the row continues to contribute through its case weight. An optional DDC-based pre-treatment provides cellwise-robust starting values, pushing resistance beyond the 50 % row-contamination breakdown of row-wise methods.
-
-```python
-from twoblock import crtb
-import numpy as np
-
-# Default: fast column-wise MAD pre-filter for starting values
-c = crtb(n_components_x=5, n_components_y=2,
-         centre='l1median', scale='scaleTau2',
-         fun='Hampel', probp1=0.95, probp2=0.975, probp3=0.999,
-         start_cellwise='prefilter')
-c.fit(X_train, Y_train)
-Y_pred = c.predict(X_test)
-
-# DDC-based cellwise starting values (requires robpy)
-c_ddc = crtb(n_components_x=5, n_components_y=2,
-             centre='l1median', scale='scaleTau2',
-             start_cellwise='DDC', crit_cellwise=0.99)
-c_ddc.fit(X_train, Y_train)
-
-# Inspect row- and cell-level diagnostics
-print(f"Row case weights: {c.caseweights_}")
-print(f"X cellwise outliers: {np.sum(c.x_cellwise_outliers_)}")
-print(f"Y cellwise outliers: {np.sum(c.y_cellwise_outliers_)}")
-
-# Sparse CRTB — variable selection + cellwise robustness
-c_sparse = crtb(n_components_x=5, n_components_y=2,
-                sparse=True, eta_x=0.5, eta_y=0,
-                centre='l1median', scale='scaleTau2')
-c_sparse.fit(X_train, Y_train)
-
-# Impute outlying cells from the fitted model
-X_imputed, Y_imputed = c.impute(X_train, Y_train)
-```
-
-Key parameters:
-- `start_cellwise`: Cellwise starting-value strategy (`'prefilter'`, `'DDC'`, or `False`)
-- `crit_cellwise`: Chi-squared quantile used to flag cells and observations for SPADIMO (default 0.99)
-- `spadieta`: Sparsity sequence passed to SPADIMO (default `np.arange(0.9, 0.05, -0.1)`)
-- Inherits `fun`, `probp1/2/3`, `centre`, `scale`, `sparse`, `eta_x/y` from `rtb`
-
-Key attributes (in addition to those from `rtb`):
-- `x_cellwise_outliers_`, `y_cellwise_outliers_`: Boolean cell-outlier maps
-- `x_cellweights_`, `y_cellweights_`: Cellwise weights (0 = flagged, 1 = clean)
-- `ddc_x_outliers_`, `ddc_y_outliers_`: Cellwise outliers from DDC initialisation (if `start_cellwise='DDC'`)
 
 ### plots — Plotly diagnostic builders
 
