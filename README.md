@@ -7,11 +7,11 @@ The sparse version is a `scikit-learn` compatible implementation of sparse twobl
 
 The robust version (`rtb`) extends twoblock with iterative M-estimation reweighting, providing resistance to outliers in both X and Y blocks [3].
 
-The cellwise robust version (`crtb`) extends `rtb` with per-cell outlier weighting for both X and Y blocks, using SPADIMO to identify contaminated cells within flagged observations [6].
+The cellwise robust version (`crtb`) extends `rtb` with per-cell outlier weighting for both X and Y blocks, using SPADIMO to identify contaminated cells within flagged observations [4].
 
-The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [4].
+The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [5].
 
-The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [5].
+The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [6].
 
 Optional `plotly`-based plot builders in `twoblock.plots` provide ready-made diagnostic figures (scree, scores, loadings, coefficients, predicted-vs-observed, case-weight histograms, cellwise-weight heatmaps, SPADIMO contributions).
 
@@ -307,13 +307,13 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 [3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
 (2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
 
-[4] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
+[4] S. Serneels. "Cellwise Robust Twoblock Dimension Reduction." (2026, in
+    preparation).
+
+[5] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
     variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5)
     Statistics and Computing 29 (4), 707-723.
 
-[5] P. Filzmoser, S. Höppner, I. Ortner, S. Serneels, T. Verdonck. ["Cellwise Robust
+[6] P. Filzmoser, S. Höppner, I. Ortner, S. Serneels, T. Verdonck. ["Cellwise Robust
     M regression."](https://doi.org/10.1016/j.csda.2020.106944) Computational
     Statistics & Data Analysis 147 (2020): 106944.
-
-[6] S. Serneels. "Cellwise Robust Twoblock Dimension Reduction." (2026, in
-    preparation).
