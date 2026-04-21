@@ -7,9 +7,13 @@ The sparse version is a `scikit-learn` compatible implementation of sparse twobl
 
 The robust version (`rtb`) extends twoblock with iterative M-estimation reweighting, providing resistance to outliers in both X and Y blocks [3].
 
-The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [4].
+The cellwise robust version (`crtb`) extends `rtb` with per-cell outlier weighting for both X and Y blocks, using SPADIMO to identify contaminated cells within flagged observations [4].
 
-The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [5].
+The diagnostic tool `spadimo` (SPArse DIrections of Maximal Outlyingness) identifies which variables contribute most to making an observation an outlier [5].
+
+The `crm` (Cellwise Robust M-regression) method detects and handles cellwise outliers - individual contaminated cells in the data matrix rather than entire rows [6].
+
+Optional `plotly`-based plot builders in `twoblock.plots` provide ready-made diagnostic figures (scree, scores, loadings, coefficients, predicted-vs-observed, case-weight histograms, cellwise-weight heatmaps, SPADIMO contributions).
 
 ## Installation
 
@@ -91,6 +95,54 @@ gcv = GridSearchCV(rtb(verbose=False),
                    scoring='r2', cv=5)
 gcv.fit(X_train, Y_train)
 ```
+
+### crtb — Cellwise Robust Twoblock
+
+CRTB extends RTB with per-cell outlier weighting. In each M-estimation iteration, SPADIMO identifies which variables drive outlyingness for flagged observations, and those individual cells are downweighted while the row continues to contribute through its case weight. An optional DDC-based pre-treatment provides cellwise-robust starting values, pushing resistance beyond the 50 % row-contamination breakdown of row-wise methods.
+
+```python
+from twoblock import crtb
+import numpy as np
+
+# Default: fast column-wise MAD pre-filter for starting values
+c = crtb(n_components_x=5, n_components_y=2,
+         centre='l1median', scale='scaleTau2',
+         fun='Hampel', probp1=0.95, probp2=0.975, probp3=0.999,
+         start_cellwise='prefilter')
+c.fit(X_train, Y_train)
+Y_pred = c.predict(X_test)
+
+# DDC-based cellwise starting values (requires robpy)
+c_ddc = crtb(n_components_x=5, n_components_y=2,
+             centre='l1median', scale='scaleTau2',
+             start_cellwise='DDC', crit_cellwise=0.99)
+c_ddc.fit(X_train, Y_train)
+
+# Inspect row- and cell-level diagnostics
+print(f"Row case weights: {c.caseweights_}")
+print(f"X cellwise outliers: {np.sum(c.x_cellwise_outliers_)}")
+print(f"Y cellwise outliers: {np.sum(c.y_cellwise_outliers_)}")
+
+# Sparse CRTB — variable selection + cellwise robustness
+c_sparse = crtb(n_components_x=5, n_components_y=2,
+                sparse=True, eta_x=0.5, eta_y=0,
+                centre='l1median', scale='scaleTau2')
+c_sparse.fit(X_train, Y_train)
+
+# Impute outlying cells from the fitted model
+X_imputed, Y_imputed = c.impute(X_train, Y_train)
+```
+
+Key parameters:
+- `start_cellwise`: Cellwise starting-value strategy (`'prefilter'`, `'DDC'`, or `False`)
+- `crit_cellwise`: Chi-squared quantile used to flag cells and observations for SPADIMO (default 0.99)
+- `spadieta`: Sparsity sequence passed to SPADIMO (default `np.arange(0.9, 0.05, -0.1)`)
+- Inherits `fun`, `probp1/2/3`, `centre`, `scale`, `sparse`, `eta_x/y` from `rtb`
+
+Key attributes (in addition to those from `rtb`):
+- `x_cellwise_outliers_`, `y_cellwise_outliers_`: Boolean cell-outlier maps
+- `x_cellweights_`, `y_cellweights_`: Cellwise weights (0 = flagged, 1 = clean)
+- `ddc_x_outliers_`, `ddc_y_outliers_`: Cellwise outliers from DDC initialisation (if `start_cellwise='DDC'`)
 
 ### spadimo — Sparse directions of maximal outlyingness
 
@@ -187,6 +239,50 @@ Key attributes:
 - `caseweights_`: Case weights from M-estimation
 - `ddc_outliers_`: Cellwise outliers from DDC initialization (if `start_cellwise=True`)
 
+### plots — Plotly diagnostic builders
+
+`twoblock.plots` provides a small set of `plotly`-based builders that accept plain numpy arrays (e.g. `est.x_scores_`, `est.coef_`, `est.caseweights_`) and return a `plotly.graph_objects.Figure`. Because the API is array-first, the same builders work with any fitted twoblock estimator and with sklearn's `PLSRegression`.
+
+Install the optional dependency:
+
+```bash
+pip install "twoblock[plots]"
+```
+
+```python
+from twoblock import crtb
+from twoblock.plots import (
+    scree, score_scatter, loadings_bar, coefficients_bar,
+    y_pred_vs_obs, caseweight_hist, cellweight_heatmap,
+    spadimo_contributions,
+)
+
+c = crtb(n_components_x=3, n_components_y=1).fit(X, Y)
+
+# Latent-space diagnostics
+score_scatter(c.x_scores_, comp_x=0, comp_y=1,
+              case_weights=c.caseweights_).show()
+loadings_bar(c.x_loadings_, component=0,
+             feature_names=X.columns).show()
+
+# Regression diagnostics
+coefficients_bar(c.coef_, feature_names=X.columns).show()
+y_pred_vs_obs(Y, c.predict(X)).show()
+
+# Outlier diagnostics
+caseweight_hist(c.caseweights_).show()
+cellweight_heatmap(c.x_cellweights_, feature_names=X.columns).show()
+
+# SPADIMO contributions for a flagged observation
+import numpy as np
+from twoblock import spadimo
+sp = spadimo(scale='scaleTau2', stop_early=True).fit(
+    X, c.caseweights_, obs=int(np.argmin(c.caseweights_)))
+spadimo_contributions(sp.contributions_,
+                      feature_names=X.columns,
+                      flagged_indices=sp.outlvars_).show()
+```
+
 ## Examples
 
 Example notebooks are provided in the [`examples/`](examples/) folder:
@@ -194,6 +290,8 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
 - `gas_turbine_example.ipynb` — Gas turbine CO/NOx emissions
 - `simulation_rtb.ipynb` — Simulation study comparing twoblock, sparse twoblock, rtb, and sparse rtb
 - `crm_simulation.ipynb` — CRM simulation under cellwise contamination with normal and Cauchy noise
+- `cookie_example_crtb.ipynb`, `gas_turbine_example_crtb.ipynb`, `voc_example_crtb.ipynb` — CRTB applied to real datasets
+- `simulation_crtb.py` — CRTB simulation study under cellwise contamination
 
 ## References
 
@@ -206,13 +304,16 @@ Example notebooks are provided in the [`examples/`](examples/) folder:
     to Sparse PLS2 and CCA."](https://doi.org/10.1002/cem.70051) Journal of
     Chemometrics, 39 (2025): e70051.
 
-[3] S. Serneels. ["Robust Twoblock Dimension Reduction."] (https://arxiv.org/pdf/2603.24820) 
-(2025, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
+[3] S. Serneels. ["Robust Twoblock Dimension Reduction."](https://arxiv.org/pdf/2603.24820) 
+    (2026, submitted). Preprint available at arXiv.org,  arXiv: 2603.24820.
 
-[4] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
+[4] S. Serneels. ["Cellwise Robust Twoblock Dimension Reduction."](https://arxiv.org/pdf/2604.15106) 
+    (2026, submitted). Preprint available at arXiv.org,  arXiv: 2604.15106.
+
+[5] M. Debruyne, S. Höppner, S. Serneels, T. Verdonck. ["Outlyingness: which
     variables contribute most?"](https://link.springer.com/article/10.1007/s11222-018-9831-5)
     Statistics and Computing 29 (4), 707-723.
 
-[5] P. Filzmoser, S. Höppner, I. Ortner, S. Serneels, T. Verdonck. ["Cellwise Robust
+[6] P. Filzmoser, S. Höppner, I. Ortner, S. Serneels, T. Verdonck. ["Cellwise Robust
     M regression."](https://doi.org/10.1016/j.csda.2020.106944) Computational
     Statistics & Data Analysis 147 (2020): 106944.

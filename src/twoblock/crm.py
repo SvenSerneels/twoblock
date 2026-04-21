@@ -81,16 +81,18 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
     outlyingness_factor : float, default 1.0
         Multiplier for outlier threshold.
 
-    start_cellwise : bool, default False
-        If True, use cellwise robust starting values via DDC (DetectDeviatingCells)
-        from robpy. DDC detects cellwise outliers and imputes them before
-        computing initial estimates. Requires robpy package. Note that this 
-        option is the only option that will make this method cellwise robust
-        also in case that leads to more than half of rows containing contaminated 
-        cells.
-        
-        If False (default), use casewise robust starting values (MM or LTS).
-        This is the option that corresponds to the 2020 paper (Filzmoser et al.).
+    start_cellwise : str or False, default False
+        Cellwise robust starting value strategy.
+        - 'DDC' : use cellwise robust starting values via DDC
+          (DetectDeviatingCells) from robpy. DDC detects cellwise outliers
+          and imputes them before computing initial estimates. Requires
+          robpy package. Note that this is the only option that will make
+          this method cellwise robust also when more than half of rows
+          contain contaminated cells.
+        - False or None (default) : use casewise robust starting values
+          (MM or LTS). This corresponds to the 2020 paper
+          (Filzmoser et al.).
+        - True : treated as 'DDC' for backward compatibility.
 
     gpu : bool, default False
         Enable GPU acceleration via CuPy.
@@ -256,8 +258,17 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
         cellwise_outliers = np.zeros((n, p), dtype=bool)
         ddc_outliers = None
 
+        # Normalise start_cellwise to canonical value
+        _sc = self.start_cellwise
+        if _sc is True:
+            _sc = "ddc"  # back-compat
+        elif _sc is None or _sc is False:
+            _sc = False
+        elif isinstance(_sc, str):
+            _sc = _sc.lower()
+
         # Cellwise robust starting values via DDC
-        if self.start_cellwise:
+        if _sc == "ddc":
             if self.verbose:
                 print("Computing cellwise robust starting values via DDC...")
             try:
@@ -432,7 +443,8 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
 
         # Impute outlying cells using original X and y
         X_imputed = self._impute_cells(
-            X_original, y_original, coef, intercept, cellwise_outliers
+            X_original, y_original, coef, intercept, cellwise_outliers,
+            x_center
         )
 
         # Store fitted attributes
@@ -810,7 +822,8 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
 
         return weights
 
-    def _impute_cells(self, X, y, coef, intercept, cellwise_outliers):
+    def _impute_cells(self, X, y, coef, intercept, cellwise_outliers,
+                       x_center):
         """
         Impute outlying cells based on the regression model.
 
@@ -830,6 +843,8 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
             Intercept.
         cellwise_outliers : ndarray of shape (n, p)
             Boolean matrix of outlying cells.
+        x_center : ndarray of shape (p,)
+            Robust center of X columns.
 
         Returns
         -------
@@ -849,7 +864,7 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
             if len(clean_cols) == 0:
                 # All cells are outlying, use median replacement
                 for j in outlying_cols:
-                    X_imputed[i, j] = self.x_center_[j]
+                    X_imputed[i, j] = x_center[j]
                 continue
 
             # Compute prediction from clean cells
@@ -865,7 +880,7 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
             if coef_sum < 1e-10:
                 # Coefficients near zero, use median
                 for j in outlying_cols:
-                    X_imputed[i, j] = self.x_center_[j]
+                    X_imputed[i, j] = x_center[j]
             else:
                 # Distribute proportionally
                 for j in outlying_cols:
@@ -873,7 +888,7 @@ class crm(BaseEstimator, TransformerMixin, RegressorMixin):
                         contrib_share = remaining * np.abs(coef[j]) / coef_sum
                         X_imputed[i, j] = contrib_share / coef[j]
                     else:
-                        X_imputed[i, j] = self.x_center_[j]
+                        X_imputed[i, j] = x_center[j]
 
         return X_imputed
 

@@ -16,5 +16,6 @@ __date__ = "2026-04-01"
 
 from .twoblock import twoblock
 from .rtb import rtb
+from .crtb import crtb
 from .spadimo import spadimo
 from .crm import crm

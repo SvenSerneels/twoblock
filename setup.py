@@ -62,5 +62,6 @@ setup(
     extras_require={
         "gpu": ["cupy-cuda12x>=14.0"],
         "robpca": ["robpy"],  # For n <= p case in spadimo
+        "plots": ["plotly>=5"],  # Plotly builders in twoblock.plots
     },
 )
