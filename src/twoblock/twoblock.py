@@ -17,7 +17,14 @@ import copy
 import pandas as ps
 from .utils import _check_input, _predict_check_input
 from .prepro import VersatileScaler
+from ._preproc_utilities import _handle_zeros_in_scale
 from ._gpu_utils import get_array_module, to_xp, to_numpy
+
+# A latent component whose score vector has (near-)zero squared norm is
+# degenerate — e.g. driven by a zero-scale (constant) column that
+# centred to all-zeros. Dividing the loadings by that norm would give
+# inf/nan; below this threshold we emit zero loadings instead.
+_LV_DEGENERATE_EPS = 1e-12
 
 # Draft version
 
@@ -198,7 +205,10 @@ class twoblock(
         )
         X0 = centring.fit_transform(X0).astype("float64")
         mX = centring.col_loc_
-        sX = centring.col_sca_
+        # Guard the X-block scale: a zero-scale (constant) column would
+        # divide-by-0 in the coef rescaling below. _handle_zeros_in_scale
+        # swaps any 0 for 1.0 — the column ends up centred-but-unscaled.
+        sX = _handle_zeros_in_scale(centring.col_sca_)
         Y0 = centring.fit_transform(Y0).astype("float64")
         my = centring.col_loc_
         sy = centring.col_sca_
@@ -257,8 +267,14 @@ class twoblock(
                 elimvars_x = xp.setdiff1d(xp.arange(p), goodies_x)
                 x_weights[elimvars_x] = self.zero_value
             x_scores = xp.dot(Xh, x_weights)
-            x_loadings = xp.dot(Xh.T, x_scores) / \
-                xp.dot(x_scores, x_scores)
+            x_ss = xp.dot(x_scores, x_scores)
+            if float(to_numpy(x_ss)) > _LV_DEGENERATE_EPS:
+                x_loadings = xp.dot(Xh.T, x_scores) / x_ss
+            else:
+                # Degenerate component (e.g. score vector collapsed to ~0
+                # because a constant column dominated x_weights). Emit
+                # zero loadings rather than inf/nan.
+                x_loadings = xp.zeros(p, dtype='float64')
             if self.sparse:
                 goodies_x = goodies_x.astype(int)
                 x_loadings[elimvars_x] = self.zero_value
@@ -302,8 +318,14 @@ class twoblock(
                 y_weights[elimvars_y] = self.zero_value
 
             y_scores = xp.dot(Yh, y_weights)
-            y_loadings = xp.dot(Yh.T, y_scores) / \
-                xp.dot(y_scores, y_scores)
+            y_ss = xp.dot(y_scores, y_scores)
+            if float(to_numpy(y_ss)) > _LV_DEGENERATE_EPS:
+                y_loadings = xp.dot(Yh.T, y_scores) / y_ss
+            else:
+                # Degenerate Y component — typically a zero-scale
+                # (constant) Y column that centred to all-zeros, so its
+                # score vector collapsed. Zero loadings, not inf/nan.
+                y_loadings = xp.zeros(q, dtype='float64')
 
             if self.sparse:
                 goodies_y = goodies_y.astype(int)

@@ -120,6 +120,39 @@ class TestTwoBlock(unittest.TestCase):
         ypttb = tb.predict(self.Xv)
         self.assertEqual(ypttb.shape, self.Yv.shape)
 
+    def test_fit_constant_column_stays_finite(self):
+        """A zero-scale (constant) column in X or Y must not produce
+        inf/nan coefficients, loadings, or predictions.
+
+        Before the zero-scale guards: a constant X column gave sX=0 ->
+        1/sX=inf in the coef rescaling; a constant Y column centred to
+        all-zeros -> its score vector collapsed -> loadings divided by
+        ||scores||^2 == 0. Both now degrade gracefully (the X column is
+        centred-but-unscaled; the degenerate component yields zero
+        loadings)."""
+        rng = np.random.default_rng(0)
+        n = 60
+        X = rng.normal(size=(n, 8))
+        X[:, 3] = 5.0                       # constant X column
+        B = rng.normal(size=(8, 3))
+        Y = X @ B + 0.1 * rng.normal(size=(n, 3))
+        Y[:, 1] = 2.0                       # constant Y column
+
+        for scale in ("std", "mad", "None"):
+            tb = twoblock(
+                n_components_x=3, n_components_y=2,
+                centre="mean", scale=scale, verbose=False,
+            )
+            tb.fit(X, Y)
+            self.assertTrue(np.isfinite(tb.coef_).all(),
+                            f"coef_ not finite at scale={scale}")
+            self.assertTrue(np.isfinite(tb.x_loadings_).all(),
+                            f"x_loadings_ not finite at scale={scale}")
+            self.assertTrue(np.isfinite(tb.y_loadings_).all(),
+                            f"y_loadings_ not finite at scale={scale}")
+            self.assertTrue(np.isfinite(tb.predict(X)).all(),
+                            f"predict() not finite at scale={scale}")
+
 
 if __name__ == "__main__":
     unittest.main()
